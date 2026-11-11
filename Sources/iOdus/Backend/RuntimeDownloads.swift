@@ -36,10 +36,10 @@ struct RuntimeDownload: Sendable, Equatable, Identifiable {
     var isBeta: Bool { d3dmetal != nil }
 
     static let crossover = RuntimeDownload(
-        id: "crossover-26.3", name: "CrossOver 26.3 Wine", wineVersion: "11.0", release: 5,
-        url: URL(string: "https://github.com/burghr/iOdus/releases/download/v0.1.5/crossover-26.3-5.tar.xz")!,
-        sha256: "3e100585211f26839da66221e397d1fdd9abdec3fe11af5d08b6453959e2b7c9",
-        size: 277_360_736, unpackedBytes: 1_600_000_000)
+        id: "crossover-26.3", name: "CrossOver 26.3 Wine", wineVersion: "11.0", release: 6,
+        url: URL(string: "https://github.com/burghr/iOdus/releases/download/v0.1.8/crossover-26.3-6.tar.xz")!,
+        sha256: "aff0279fd1026e4463ae3e2ab1da2bf056ca673e94de2ef6fc75cc1732cbd41d",
+        size: 277_365_752, unpackedBytes: 1_600_000_000)
 
     /// The D3DMetal 4 beta runtime: the same Wine package, with D3DMetal 4 from
     /// Game Porting Toolkit 4 and the d3d12.dll layer. Forza Horizon 6 needs it.
