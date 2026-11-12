@@ -129,6 +129,8 @@ final class GameLauncher {
             if let unity = UnityGame.detect(in: folder) {
                 // D3DMetal crashes on Cmd+Tab in exclusive full screen. Use borderless.
                 await runtime.preferBorderless(unity)
+                // A broken saved size (1 x 1) makes the game flash in full screen.
+                await runtime.repairUnityResolution(unity)
                 gameArguments = UnityGame.arguments
                 if let display = Displays.find(options.display) {
                     gameArguments += Displays.unityArguments(display, retina: options.retina)

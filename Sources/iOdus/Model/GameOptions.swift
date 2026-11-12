@@ -42,7 +42,7 @@ struct GameOptionsStore {
 
 /// The rows of the Game settings page.
 enum GameSettingsRow: Int, CaseIterable {
-    case runtime, display, retina, performance, showInFinder, uninstall
+    case runtime, display, resetDisplay, retina, performance, showInFinder, uninstall
 }
 
 extension PerformanceOverlayMode {

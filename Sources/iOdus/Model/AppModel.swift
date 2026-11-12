@@ -1479,6 +1479,9 @@ final class AppModel: ObservableObject {
         case .uninstall:
             requestUninstall(game)
             return
+        case .resetDisplay:
+            resetDisplaySettings(game)
+            return
         case .display:
             guard isUnityGame(game) else {
                 showToast("iOdus can choose the display only for Unity games now.", seconds: 5)
@@ -1498,6 +1501,34 @@ final class AppModel: ObservableObject {
             overlayChanged(from: old)
         }
         objectWillChange.send()
+    }
+
+    /// Removes the screen settings that a Unity game saved in the prefix of its runtime.
+    private func resetDisplaySettings(_ game: Game) {
+        guard let path = downloads.installs[game.id]?.path,
+              let unity = UnityGame.detect(in: URL(fileURLWithPath: path)) else {
+            showToast("iOdus can reset the display settings only for Unity games now.", seconds: 5)
+            return
+        }
+        guard playState.gameID != game.id else {
+            showToast("Stop \(game.title) first.")
+            return
+        }
+        let runtime = runtime(for: game)
+        guard FileManager.default.fileExists(atPath: runtime.prefix.path), runtime.problem == nil else {
+            showToast("\(game.title) saved no display settings on \(runtime.name) yet.", seconds: 5)
+            return
+        }
+        Task {
+            do {
+                try runtime.linkSignedLoader()
+                let count = try await runtime.resetUnityDisplay(unity)
+                showToast(count == 0 ? "\(game.title) saved no display settings on \(runtime.name)."
+                                     : "The display settings of \(game.title) are reset. It starts on its defaults.", seconds: 6)
+            } catch {
+                showToast(error.localizedDescription, seconds: 8)
+            }
+        }
     }
 
     /// After a change of an overlay choice: the system panel changes now;

@@ -509,14 +509,82 @@ struct UnityGame: Equatable {
 
     /// Reads the mode from `reg query` output, for example "REG_DWORD    0x0".
     static func mode(fromQuery output: String) -> Int? {
-        guard let line = output.split(whereSeparator: \.isNewline).first(where: { $0.contains(modeValue) }),
+        dword(modeValue, fromQuery: output)
+    }
+
+    /// The saved window size and "use the native size". The hash suffixes are fixed for these names.
+    static let widthValue = "Screenmanager Resolution Width_h182942802"
+    static let heightValue = "Screenmanager Resolution Height_h2627697771"
+    static let useNativeValue = "Screenmanager Resolution Use Native_h1405027254"
+    /// A saved size below this is broken (a game saved 1 x 1 after a display change).
+    static let minimumSize = (width: 640, height: 480)
+
+    /// A REG_DWORD value from `reg query` output.
+    static func dword(_ name: String, fromQuery output: String) -> Int? {
+        guard let line = output.split(whereSeparator: \.isNewline).first(where: { valueName(of: $0) == name }),
               let hex = line.split(separator: " ").last(where: { $0.hasPrefix("0x") }) else { return nil }
         return Int(hex.dropFirst(2), radix: 16)
+    }
+
+    /// The value names in `reg query` output (Wine prints "    <name>    <type>    <data>").
+    static func valueNames(fromQuery output: String) -> [String] {
+        output.split(whereSeparator: \.isNewline).compactMap { valueName(of: $0) }
+    }
+
+    private static func valueName(of line: Substring) -> String? {
+        guard line.hasPrefix("    ") else { return nil }
+        let parts = line.dropFirst(4).components(separatedBy: "    ")
+        guard parts.count >= 2, parts[1].hasPrefix("REG_") else { return nil }
+        return parts[0]
+    }
+
+    /// The values that "Reset display settings" removes: Unity's saved screen settings and monitor.
+    static func displayValues(fromQuery output: String) -> [String] {
+        valueNames(fromQuery: output).filter { $0.hasPrefix("Screenmanager ") || $0.hasPrefix("UnitySelectMonitor") }
+    }
+
+    /// True when the saved size is broken: smaller than the minimum in one direction.
+    static func hasBrokenSize(query output: String) -> Bool {
+        let width = dword(widthValue, fromQuery: output), height = dword(heightValue, fromQuery: output)
+        if let width, width < minimumSize.width { return true }
+        if let height, height < minimumSize.height { return true }
+        return false
     }
 }
 
 extension GameRuntime {
     /// Changes exclusive full screen (0) to a full screen window (1). Other modes stay.
+    /// A broken saved size (for example 1 x 1 after a change between displays) made
+    /// Football Manager 27 flash colors in full screen on every display. Unity then
+    /// uses the native size of the display again. Returns true when it repaired it.
+    @discardableResult
+    func repairUnityResolution(_ game: UnityGame) async -> Bool {
+        guard let query = try? await XodusCLI.runProcess(wine64, ["reg", "query", game.registryKey],
+                                                         environment: environment(), timeout: 60),
+              query.status == 0, UnityGame.hasBrokenSize(query: String(decoding: query.stdout, as: UTF8.self)) else { return false }
+        for name in [UnityGame.widthValue, UnityGame.heightValue] {
+            _ = try? await XodusCLI.runProcess(wine64, ["reg", "delete", game.registryKey, "/v", name, "/f"],
+                                               environment: environment(), timeout: 60)
+        }
+        _ = try? await XodusCLI.runProcess(wine64, ["reg", "add", game.registryKey, "/v", UnityGame.useNativeValue,
+                                                    "/t", "REG_DWORD", "/d", "1", "/f"],
+                                           environment: environment(), timeout: 60)
+        return true
+    }
+
+    /// Removes the screen settings that a Unity game saved (size, window mode, monitor).
+    /// The game starts on its defaults. Returns the number of removed values.
+    func resetUnityDisplay(_ game: UnityGame) async throws -> Int {
+        let query = try await XodusCLI.runProcess(wine64, ["reg", "query", game.registryKey], environment: environment(), timeout: 60)
+        guard query.status == 0 else { return 0 }   // The game saved nothing yet.
+        let names = UnityGame.displayValues(fromQuery: String(decoding: query.stdout, as: UTF8.self))
+        for name in names {
+            try await wine(["reg", "delete", game.registryKey, "/v", name, "/f"])
+        }
+        _ = try? await XodusCLI.runProcess(wineserver, ["-w"], environment: environment(), timeout: 60)
+        return names.count
+    }
+
     func preferBorderless(_ game: UnityGame) async {
         let query = try? await XodusCLI.runProcess(wine64, ["reg", "query", game.registryKey, "/v", UnityGame.modeValue],
                                                    environment: environment(), timeout: 60)

@@ -87,6 +87,11 @@ final class GameSettingsModelTests: XCTestCase {
         model.confirm()
         XCTAssertNil(model.gameOptions.options(game.id).display)
 
+        // Reset display settings: also only for Unity games; nothing changes.
+        model.move(.down)
+        model.confirm()
+        XCTAssertEqual(model.gameOptions.options(game.id), model.gameOptions.options(other.id))
+
         model.move(.down)
         model.confirm()
         XCTAssertTrue(model.gameOptions.options(game.id).retina)
@@ -99,7 +104,7 @@ final class GameSettingsModelTests: XCTestCase {
         XCTAssertEqual(model.overlayMode(for: game.id), .off)
         XCTAssertEqual(model.overlayMode(for: other.id), global, "Other games keep the default")
 
-        model.move(.up); model.move(.up); model.move(.up)
+        model.move(.up); model.move(.up); model.move(.up); model.move(.up)
         model.confirm()
         XCTAssertEqual(model.screen, .runtimes(game.id), "The Runtime row opens the runtimes of the game")
         model.back()

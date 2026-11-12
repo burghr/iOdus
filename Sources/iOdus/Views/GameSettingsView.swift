@@ -113,6 +113,14 @@ struct GameSettingsView: View {
                 value = "Default"
             }
             return ("speedometer", "Performance overlay", [detail], value)
+        case .resetDisplay:
+            guard model.isUnityGame(game) else {
+                return ("arrow.counterclockwise", "Reset display settings",
+                        ["Only for Unity games: this game keeps its display settings itself."], nil)
+            }
+            return ("arrow.counterclockwise", "Reset display settings",
+                    ["Removes the screen size, window mode, and monitor that the game saved.",
+                     "Use it when the game opens with a wrong size or flashes."], "Reset")
         case .showInFinder:
             let path = model.downloads.installs[game.id]?.path ?? ""
             return ("folder", "Show in Finder",
