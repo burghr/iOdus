@@ -124,56 +124,60 @@ final class RuntimeSetupTests: XCTestCase {
     // MARK: Flow
 
     func testStepOrderSkipsStepsThatAreDone() {
-        XCTAssertEqual(SetupFlow.steps(rosetta: .missing, runtimeInstalled: false), [.rosetta, .runtime])
-        XCTAssertEqual(SetupFlow.steps(rosetta: .installed, runtimeInstalled: false), [.runtime])
-        XCTAssertEqual(SetupFlow.steps(rosetta: .missing, runtimeInstalled: true), [.rosetta])
-        XCTAssertEqual(SetupFlow.steps(rosetta: .installed, runtimeInstalled: true), [])
-        XCTAssertEqual(SetupFlow.steps(rosetta: .notAppleSilicon, runtimeInstalled: false), [.runtime],
+        XCTAssertEqual(SetupFlow.steps(rosetta: .missing, runtimeReady: false), [.rosetta, .runtimes])
+        XCTAssertEqual(SetupFlow.steps(rosetta: .installed, runtimeReady: false), [.runtimes])
+        XCTAssertEqual(SetupFlow.steps(rosetta: .missing, runtimeReady: true), [.rosetta])
+        XCTAssertEqual(SetupFlow.steps(rosetta: .installed, runtimeReady: true), [])
+        XCTAssertEqual(SetupFlow.steps(rosetta: .notAppleSilicon, runtimeReady: false), [.runtimes],
                        "An Intel Mac sees why games do not start")
     }
 
-    func testOptionalStepsComeAfterTheToolkit() {
-        XCTAssertEqual(SetupFlow.steps(rosetta: .missing, runtimeInstalled: false, wineRuntime: true, vcRuntime: true),
-                       [.rosetta, .runtime, .wineRuntime, .vcRuntime])
-        XCTAssertEqual(SetupFlow.steps(rosetta: .installed, runtimeInstalled: true, wineRuntime: false, vcRuntime: true),
-                       [.vcRuntime])
-        XCTAssertEqual(SetupFlow.steps(rosetta: .notAppleSilicon, runtimeInstalled: false, wineRuntime: true, vcRuntime: true),
-                       [.runtime], "An Intel Mac gets no optional steps")
+    func testOptionalStepsComeAfterTheRuntimes() {
+        XCTAssertEqual(SetupFlow.steps(rosetta: .missing, runtimeReady: false, offerRuntimes: true, vcRuntime: true),
+                       [.rosetta, .runtimes, .vcRuntime])
+        XCTAssertEqual(SetupFlow.steps(rosetta: .installed, runtimeReady: true, offerRuntimes: true),
+                       [.runtimes], "The start offers the recommended runtime")
+        XCTAssertEqual(SetupFlow.steps(rosetta: .installed, runtimeReady: true, vcRuntime: true), [.vcRuntime])
+        XCTAssertEqual(SetupFlow.steps(rosetta: .notAppleSilicon, runtimeReady: false, offerRuntimes: true, vcRuntime: true),
+                       [.runtimes], "An Intel Mac gets no optional steps")
         XCTAssertTrue(SetupStep.vcRuntime.isOptional)
-        XCTAssertFalse(SetupStep.runtime.isOptional)
+        XCTAssertFalse(SetupStep.runtimes.isOptional)
     }
 
-    func testItemsOfTheOptionalSteps() {
-        var flow = SetupFlow(steps: [.wineRuntime, .vcRuntime], rosetta: .installed)
-        flow.wineDownload = RuntimeDownload.crossover
-        XCTAssertEqual(flow.items, [.install, .skip])
-        flow.wineReady = false
-        XCTAssertEqual(flow.items, [.skip], "No install without D3DMetal from the toolkit")
-        flow.wineReady = true
+    func testItemsOfEachStage() {
+        var flow = SetupFlow(steps: [.rosetta, .runtimes, .vcRuntime], rosetta: .missing)
+        XCTAssertEqual(flow.items, [.installRosetta, .checkRosetta, .notNow])
+        flow.rosettaBusy = true
+        XCTAssertEqual(flow.items, [])
+        flow.index = 1
+        flow.choices = [SetupChoice(kind: .download(RuntimeDownload.crossover), checked: true),
+                        SetupChoice(kind: .download(RuntimeDownload.crossoverD3DMetal4), checked: false, installed: true),
+                        SetupChoice(kind: .gptk, checked: false)]
+        XCTAssertEqual(flow.items, [.choice(0), .choice(2), .openLicense, .license, .install, .notNow],
+                       "An installed runtime cannot be checked")
         flow.runtime = .downloading(done: 1, total: 2)
         XCTAssertEqual(flow.items, [.cancel])
         flow.runtime = .extracting
         XCTAssertEqual(flow.items, [])
         flow.runtime = .choose
-        flow.index = 1
+        flow.index = 2
         XCTAssertEqual(flow.items, [.install, .skip])
-    }
-
-    func testItemsOfEachStage() {
-        var flow = SetupFlow(steps: [.rosetta, .runtime], rosetta: .missing)
-        XCTAssertEqual(flow.items, [.installRosetta, .checkRosetta, .notNow])
-        flow.rosettaBusy = true
-        XCTAssertEqual(flow.items, [])
         flow.index = 1
-        flow.existing = [ExistingGPTK(app: temp, version: "2.1"), ExistingGPTK(app: temp, version: "3.0-3")]
-        XCTAssertEqual(flow.items, [.openLicense, .license, .useExisting(1), .download, .notNow],
-                       "Only a matching copy can be used")
-        flow.runtime = .downloading(done: 1, total: 2)
-        XCTAssertEqual(flow.items, [.cancel])
-        flow.runtime = .extracting
-        XCTAssertEqual(flow.items, [])
         flow.rosetta = .notAppleSilicon
         XCTAssertEqual(flow.items, [.notNow])
+    }
+
+    func testTheLicenseIsNeededOnlyForD3DMetal() {
+        var flow = SetupFlow(steps: [.runtimes], rosetta: .installed)
+        flow.choices = [SetupChoice(kind: .download(RuntimeDownload.crossover), checked: false),
+                        SetupChoice(kind: .download(RuntimeDownload.highballArm64), checked: true),
+                        SetupChoice(kind: .gptk, checked: false, installed: true)]
+        XCTAssertEqual(flow.checkedChoices, [1])
+        XCTAssertFalse(flow.needsLicense, "FEX has no Apple software")
+        flow.choices[0].checked = true
+        XCTAssertTrue(flow.needsLicense)
+        XCTAssertEqual(flow.checkedChoices, [0, 1])
+        XCTAssertGreaterThan(flow.choices[0].size, RuntimeDownload.crossover.size, "The size includes D3DMetal 3")
     }
 }
 
@@ -202,27 +206,43 @@ final class SetupModelTests: XCTestCase {
         return model
     }
 
-    func testPlayDoesNotShowTheOptionalSteps() {
+    func testPlayShowsOnlyTheRuntimes() {
         let model = model()
         XCTAssertTrue(model.openSetup(rosetta: .installed))
-        XCTAssertEqual(model.setup?.steps, [.runtime])
+        XCTAssertEqual(model.setup?.steps, [.runtimes])
     }
 
-    func testNotNowOnTheToolkitEndsTheSetup() {
+    func testTheListChecksOnlyTheRecommendedRuntime() {
         let model = model()
-        model.setup = SetupFlow(steps: [.runtime, .wineRuntime, .vcRuntime], rosetta: .installed)
-        model.setup?.existing = []
+        model.openSetup(rosetta: .installed)
+        let choices = model.setup?.choices ?? []
+        XCTAssertEqual(choices.first?.downloadID, RuntimeDownload.catalog.first?.id)
+        XCTAssertEqual(choices.filter(\.checked).count, 1)
+        XCTAssertEqual(choices.last?.kind, .gptk, "The toolkit is the last, and not checked")
+        XCTAssertEqual(choices.count, RuntimeDownload.catalog.count + 1)
+    }
+
+    func testABoxChecksAndClears() {
+        let model = model()
+        model.openSetup(rosetta: .installed)
+        XCTAssertEqual(model.setup?.focusedItem, .choice(0))
+        model.confirm()
+        XCTAssertEqual(model.setup?.choices[0].checked, false)
+        model.confirm()
+        XCTAssertEqual(model.setup?.choices[0].checked, true)
+    }
+
+    func testNotNowOnTheRuntimesEndsTheSetup() {
+        let model = model()
+        model.setup = SetupFlow(steps: [.runtimes, .vcRuntime], rosetta: .installed)
         model.tapSetup(.notNow)
-        XCTAssertNil(model.setup, "The other runtimes need the toolkit")
+        XCTAssertNil(model.setup, "Without a runtime, the other steps do not help")
+        XCTAssertTrue(UserDefaults.standard.bool(forKey: "setupPostponed"), "The start does not show it again")
     }
 
-    func testSkipRemembersTheStep() {
+    func testSkipRemembersTheVisualCStep() {
         let model = model()
-        model.setup = SetupFlow(steps: [.wineRuntime, .vcRuntime], rosetta: .installed)
-        model.setup?.wineDownload = RuntimeDownload.crossover
-        model.tapSetup(.skip)
-        XCTAssertEqual(model.setup?.step, .vcRuntime)
-        XCTAssertTrue(UserDefaults.standard.bool(forKey: AppModel.skippedWineKey))
+        model.setup = SetupFlow(steps: [.vcRuntime], rosetta: .installed)
         model.tapSetup(.skip)
         XCTAssertNil(model.setup)
         XCTAssertTrue(UserDefaults.standard.bool(forKey: AppModel.skippedVCKey))
@@ -231,7 +251,7 @@ final class SetupModelTests: XCTestCase {
     func testOpenSetupOnlyWithStepsLeft() throws {
         let model = model()
         XCTAssertTrue(model.openSetup(rosetta: .installed))
-        XCTAssertEqual(model.setup?.steps, [.runtime])
+        XCTAssertEqual(model.setup?.steps, [.runtimes])
         XCTAssertFalse(model.isTyping, "The setup takes the input")
 
         let wine = GPTKRelease.wine64(inApp: GPTKRelease.pinned.installedApp(in: root))
@@ -242,26 +262,20 @@ final class SetupModelTests: XCTestCase {
         XCTAssertNil(model.setup)
     }
 
-    func testDownloadNeedsTheLicenseAndNotNowGoesToTheLibrary() {
+    func testInstallNeedsACheckedRuntimeAndTheLicense() {
         let model = model()
         model.openSetup(rosetta: .installed)
-        model.setup?.existing = []
-        // Items: Read the license, the license box, Download, Not now.
-        model.move(.right); model.move(.right)
-        XCTAssertEqual(model.setup?.focusedItem, .download)
-        model.confirm()
+        model.tapSetup(.install)
         XCTAssertEqual(model.setup?.runtime, .choose, "No download without the license")
+        XCTAssertNil(model.setup?.current)
         XCTAssertEqual(model.setup?.focusedItem, .license, "The focus goes to the license box")
         XCTAssertNotNil(model.setup?.error)
 
-        model.confirm()
-        XCTAssertEqual(model.setup?.licenseAccepted, true)
+        model.tapSetup(.choice(0))
+        model.tapSetup(.install)
+        XCTAssertEqual(model.setup?.error, "Check at least one runtime, or select Not now.")
         model.back()
         XCTAssertNotNil(model.setup, "B does not leave the setup")
-
-        model.tapSetup(.notNow)
-        XCTAssertNil(model.setup, "Not now on the last step opens the library")
-        XCTAssertTrue(UserDefaults.standard.bool(forKey: "setupPostponed"), "The start does not show it again")
     }
 }
 

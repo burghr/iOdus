@@ -755,7 +755,7 @@ final class AppModel: ObservableObject {
             showToast(stub.note(for: game.title), seconds: 7)
             return
         }
-        if !GPTKRelease.pinned.isInstalled(in: setupRoot) || RosettaStatus.detect() == .missing, openSetup() {
+        if !hasReadyRuntime || RosettaStatus.detect() == .missing, openSetup() {
             return
         }
         if saveSync == nil, case .conflict(let local, let cloud) = cloudSaveStatus(for: game) {

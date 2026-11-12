@@ -81,6 +81,53 @@ final class D3DMetal4RuntimeTests: XCTestCase {
                      "No staging folder stays")
     }
 
+    func testTheWine11RuntimeBringsD3DMetal3() {
+        let wine = RuntimeDownload.crossover
+        XCTAssertEqual(wine.d3dmetal?.version, "3.0")
+        XCTAssertEqual(wine.d3dmetal?.major, 3)
+        XCTAssertEqual(wine.d3dmetal?.needsLayer, false)
+        XCTAssertFalse(wine.isBeta, "D3DMetal 3 is not a beta")
+        XCTAssertEqual(RuntimeDownload.crossoverD3DMetal4.d3dmetal?.needsLayer, true)
+        XCTAssertTrue(RuntimeDownload.crossoverD3DMetal4.isBeta)
+    }
+
+    func testInstallMakesTheD3DMetal3Runtime() throws {
+        // Apple's redist folder from Game Porting Toolkit 3.0, if this Mac has a copy.
+        let source = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("projects/iodus-runtimes/gptk-3.0")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: source.appendingPathComponent("redist").path),
+                          "No GPTK 3.0 redist folder on this Mac")
+        let work = try tempFolder()
+        try makeBaseRuntime(in: work.appendingPathComponent("base"), id: "crossover-26.3")
+        let archive = work.appendingPathComponent("runtime.tar")
+        try RuntimeSetup.run("/usr/bin/tar", ["-cf", archive.path, "-C", work.appendingPathComponent("base").path, "crossover-26.3"])
+        let package = work.appendingPathComponent("pkg/d3dmetal-3.0")
+        try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
+        try RuntimeSetup.run("/usr/bin/ditto", [source.appendingPathComponent("redist").path, package.appendingPathComponent("redist").path])
+        try Data("Apple license".utf8).write(to: package.appendingPathComponent("License.rtf"))
+        let d3dmetalArchive = work.appendingPathComponent("d3dmetal.tar")
+        try RuntimeSetup.run("/usr/bin/tar", ["-cf", d3dmetalArchive.path, "-C", work.appendingPathComponent("pkg").path, "d3dmetal-3.0"])
+
+        let runtimes = work.appendingPathComponent("Runtimes")
+        // No d3d12 layer and no Game Porting Toolkit.
+        try RuntimeInstaller.install(archive: archive, download: RuntimeDownload.crossover, runtimes: runtimes,
+                                     gptkWine: work.appendingPathComponent("no-gptk"), d3dmetalArchive: d3dmetalArchive, shim: nil)
+
+        let root = runtimes.appendingPathComponent("crossover-26.3")
+        let pe = root.appendingPathComponent("lib/wine/x86_64-windows")
+        XCTAssertEqual(try Data(contentsOf: pe.appendingPathComponent("d3d12.dll")),
+                       try Data(contentsOf: source.appendingPathComponent("redist/lib/wine/x86_64-windows/d3d12.dll")),
+                       "Apple's d3d12.dll keeps its name")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: pe.appendingPathComponent(RuntimeInstaller.renamedD3D12).path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("lib/external/D3DMetal.framework").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("LICENSES/D3DMetal/License.rtf").path))
+        let manifest = try JSONDecoder().decode(RuntimeManifest.self, from: Data(contentsOf: root.appendingPathComponent("runtime.json")))
+        XCTAssertEqual(manifest.id, "crossover-26.3")
+        XCTAssertNil(manifest.environment?["WINE_BUILTIN_BY_FILE_NAME"])
+        XCTAssertNil(manifest.environment?["D3DM_MTL4"])
+        XCTAssertTrue(manifest.d3dmetal?.windows.contains("atidxx64.dll") ?? false, "Apple's file list")
+        XCTAssertFalse(manifest.d3dmetal?.windows.contains("nvngx.dll") ?? true, "Not Apple's file")
+    }
+
     func testAPackageWithoutApplesSignatureIsRefused() throws {
         let work = try tempFolder()
         try makeBaseRuntime(in: work.appendingPathComponent("base"), id: "crossover-26.3")

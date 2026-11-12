@@ -1,5 +1,5 @@
 #!/bin/sh
-# Makes the D3DMetal package for the D3DMetal 4 beta runtime: the "redist"
+# Makes a D3DMetal package (D3DMetal 3 or the D3DMetal 4 beta): the "redist"
 # folder of Apple's Game Porting Toolkit, unchanged, with Apple's license,
 # acknowledgements, and read-me files, and a short notice.
 #

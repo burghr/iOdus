@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The setup after the sign-in: Rosetta, then the game runtime. The steps
+/// The setup after the sign-in: Rosetta, then the runtimes. The steps
 /// that are done do not show. A, the mouse, or a click selects an item.
 struct SetupView: View {
     @EnvironmentObject private var model: AppModel
@@ -16,8 +16,7 @@ struct SetupView: View {
                 stepBar(s)
                 switch flow.step {
                 case .rosetta: rosetta(s)
-                case .runtime: runtime(s)
-                case .wineRuntime: wineRuntime(s)
+                case .runtimes: runtimes(s)
                 case .vcRuntime: vcRuntime(s)
                 case nil: EmptyView()
                 }
@@ -98,128 +97,125 @@ struct SetupView: View {
         }
     }
 
-    // MARK: Game runtime
+    // MARK: Runtimes
 
     @ViewBuilder
-    private func runtime(_ s: CGFloat) -> some View {
+    private func runtimes(_ s: CGFloat) -> some View {
         if flow.rosetta == .notAppleSilicon {
             header("This Mac cannot run games", symbol: "exclamationmark.triangle",
-                   "The Game Porting Toolkit needs a Mac with Apple silicon. You can still use your library, your friends, your messages, and the Store.", s)
+                   "The game runtimes need a Mac with Apple silicon. You can still use your library, your friends, your messages, and the Store.", s)
             button("Continue", item: .notNow, primary: true, s)
+        } else if let index = flow.current, flow.choices.indices.contains(index) {
+            installing(flow.choices[index], s)
         } else {
-            switch flow.runtime {
-            case .choose: runtimeChoice(s)
-            case .downloading(let done, let total):
-                header("Downloading the Game Porting Toolkit", symbol: "arrow.down.circle",
-                       "iOdus downloads the Game Porting Toolkit \(GPTKRelease.pinned.version) from GitHub.", s)
+            runtimeList(s)
+        }
+    }
+
+    /// The runtime that installs now, with its place in the queue.
+    @ViewBuilder
+    private func installing(_ choice: SetupChoice, _ s: CGFloat) -> some View {
+        let place = flow.queue.count > 1
+            ? "\((flow.queue.firstIndex(of: flow.current ?? -1) ?? 0) + 1) of \(flow.queue.count): " : ""
+        switch flow.runtime {
+        case .choose, .downloading:
+            header("Downloading \(place)\(choice.name)", symbol: "arrow.down.circle",
+                   "iOdus downloads the runtime from GitHub and checks its SHA-256.", s)
+            if case .downloading(let done, let total) = flow.runtime {
                 progress(done: done, total: total, s)
-                button("Cancel", item: .cancel, s)
-            case .verifying:
-                header("Checking the download", symbol: "checkmark.shield", nil, s)
-                busy("iOdus compares the SHA-256 of the file with the pinned value.", s)
-            case .extracting:
-                header("Installing the Game Porting Toolkit", symbol: "shippingbox", nil, s)
-                busy("iOdus extracts the Game Porting Toolkit. This can take a minute.", s)
-            case .copying:
-                header("Copying the Game Porting Toolkit", symbol: "doc.on.doc", nil, s)
-                busy("iOdus copies the Game Porting Toolkit into its own folder.", s)
             }
+            button("Cancel", item: .cancel, s)
+        case .verifying:
+            header("Checking \(place)\(choice.name)", symbol: "checkmark.shield", nil, s)
+            busy("iOdus compares the SHA-256 of the file with the pinned value.", s)
+        case .extracting:
+            header("Installing \(place)\(choice.name)", symbol: "shippingbox", nil, s)
+            busy("iOdus checks and extracts the runtime. This can take a minute.", s)
+        case .copying:
+            header("Copying \(place)\(choice.name)", symbol: "doc.on.doc", nil, s)
+            busy("iOdus copies the Game Porting Toolkit from this Mac into its own folder.", s)
         }
     }
 
     @ViewBuilder
-    private func runtimeChoice(_ s: CGFloat) -> some View {
-        let release = GPTKRelease.pinned
-        header("Install the Game Porting Toolkit", symbol: "gamecontroller",
-               "iOdus runs Windows games with Apple's Game Porting Toolkit: Wine with D3DMetal.", s)
+    private func runtimeList(_ s: CGFloat) -> some View {
+        header("Choose the runtimes", symbol: "square.stack.3d.up",
+               "A runtime runs Windows games on your Mac. Check the runtimes to install now. You can add or remove runtimes later in Settings > Runtimes.", s)
 
-        facts([("Version", release.version), ("Download", Bytes.text(release.size)),
-               ("Source", "Gcenx build on GitHub"), ("Check", "SHA-256")], s)
+        VStack(spacing: 8 * s) {
+            ForEach(flow.choices.indices, id: \.self) { index in
+                choiceRow(index, s)
+            }
+        }
 
-        VStack(alignment: .leading, spacing: 16 * s) {
-            VStack(alignment: .leading, spacing: 6 * s) {
-                Text("Apple's license")
-                    .font(.system(size: 20 * s, weight: .semibold))
+        let total = flow.checkedChoices.reduce(Int64(0)) { $0 + flow.choices[$1].size }
+        if flow.needsLicense {
+            VStack(alignment: .leading, spacing: 12 * s) {
                 Text("D3DMetal is Apple software under Apple's license. Wine is free software under the GNU LGPL. Read the license before you continue.")
                     .font(.system(size: 17 * s))
                     .foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 16 * s) {
+                    button("Read the license", symbol: "doc.text", item: .openLicense, s)
+                    checkbox(s)
+                }
             }
-            HStack(spacing: 16 * s) {
-                button("Read the license", symbol: "doc.text", item: .openLicense, s)
-                checkbox(s)
-            }
-            HStack(spacing: 28 * s) {
-                link("Game Porting Toolkit at Apple", symbol: "safari", url: GPTKRelease.appleURL, s)
-                link("Release notes", symbol: "shippingbox", url: GPTKRelease.releaseURL, s)
-            }
-        }
-
-        let other = flow.existing.filter { !$0.matches }
-        if !other.isEmpty {
-            Text(other.map { "\($0.app.path) has version \($0.version ?? "unknown"). iOdus needs \(release.version)." }
-                    .joined(separator: "\n"))
-                .font(.system(size: 16 * s))
-                .foregroundStyle(Theme.textSecondary)
         }
 
         Divider().overlay(Color.white.opacity(0.12))
 
-        let hasCopy = flow.items.contains { if case .useExisting = $0 { return true } else { return false } }
         HStack(spacing: 16 * s) {
-            ForEach(flow.items.filter { if case .useExisting = $0 { return true } else { return false } }, id: \.key) { item in
-                if case .useExisting(let i) = item {
-                    button("Use the copy in \(Self.place(flow.existing[i].app))", symbol: "doc.on.doc",
-                           item: item, primary: true, dimmed: !flow.licenseAccepted, s)
-                }
-            }
-            button("Download (\(Bytes.text(release.size)))", symbol: "arrow.down.circle", item: .download,
-                   primary: !hasCopy, dimmed: !flow.licenseAccepted, s)
+            let ready = !flow.checkedChoices.isEmpty && (!flow.needsLicense || flow.licenseAccepted)
+            button(flow.checkedChoices.isEmpty ? "Install" : "Install (\(Bytes.text(total)))",
+                   symbol: "arrow.down.circle", item: .install, primary: true, dimmed: !ready, s)
             button("Not now", item: .notNow, s)
             Spacer(minLength: 0)
-            if !flow.licenseAccepted {
-                Text("Accept the license to continue.")
-                    .font(.system(size: 16 * s))
-                    .foregroundStyle(Theme.textSecondary)
+            if flow.checkedChoices.isEmpty {
+                hint("Check at least one runtime.", s)
+            } else if flow.needsLicense && !flow.licenseAccepted {
+                hint("Accept the license to continue.", s)
             }
         }
     }
 
-    // MARK: Wine 11 runtime
-
-    @ViewBuilder
-    private func wineRuntime(_ s: CGFloat) -> some View {
-        if let download = flow.wineDownload {
-            switch flow.runtime {
-            case .choose:
-                header("Install the Wine 11 runtime", symbol: "square.stack.3d.up",
-                       "A newer Wine with better game and controller support. Some games need it, for example Hades II.", s)
-                facts([("Version", "Wine \(download.wineVersion) · \(download.name.replacingOccurrences(of: " Wine", with: ""))"),
-                       ("Download", Bytes.text(download.size)),
-                       ("On disk", Bytes.text(download.unpackedBytes)),
-                       ("Check", "SHA-256")], s)
-                Text(flow.wineReady
-                     ? "iOdus adds D3DMetal from the Game Porting Toolkit and uses this runtime as the default. You can change the runtime of each game in Settings > Runtimes."
-                     : "This runtime uses D3DMetal from the Game Porting Toolkit. Install the Game Porting Toolkit first.")
-                    .font(.system(size: 17 * s))
-                    .foregroundStyle(Theme.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                actions(s) {
-                    if flow.wineReady {
-                        button("Install (\(Bytes.text(download.size)))", symbol: "arrow.down.circle", item: .install, primary: true, s)
-                    }
-                    button("Skip", item: .skip, primary: !flow.wineReady, s)
-                }
-            case .downloading(let done, let total):
-                header("Downloading the Wine 11 runtime", symbol: "arrow.down.circle",
-                       "iOdus downloads \(download.displayName) from GitHub.", s)
-                progress(done: done, total: total, s)
-                button("Cancel", item: .cancel, s)
-            case .verifying, .extracting, .copying:
-                header("Installing the Wine 11 runtime", symbol: "shippingbox", nil, s)
-                busy("iOdus checks the SHA-256, extracts the runtime, and adds D3DMetal. This can take a minute.", s)
+    /// One runtime of the list: a check box, the name and a line about it, and the size.
+    private func choiceRow(_ index: Int, _ s: CGFloat) -> some View {
+        let choice = flow.choices[index]
+        let focused = flow.focusedItem == .choice(index)
+        let symbol = choice.installed ? "checkmark.circle.fill" : (choice.checked ? "checkmark.square.fill" : "square")
+        return HStack(spacing: 16 * s) {
+            Image(systemName: symbol)
+                .font(.system(size: 26 * s))
+                .foregroundStyle(choice.checked || choice.installed
+                                 ? (focused ? Theme.accent : Theme.accentBright)
+                                 : (focused ? Color.black : .white))
+            VStack(alignment: .leading, spacing: 3 * s) {
+                Text(choice.name)
+                    .font(.system(size: 19 * s, weight: .semibold))
+                Text(choice.detail)
+                    .font(.system(size: 15 * s))
+                    .foregroundStyle(focused ? Color.black.opacity(0.7) : Theme.textSecondary)
+                    .lineLimit(1)
             }
+            Spacer(minLength: 12 * s)
+            Text(choice.installed ? "Installed" : Bytes.text(choice.size))
+                .font(.system(size: 16 * s, weight: .medium))
+                .foregroundStyle(focused ? Color.black.opacity(0.7) : Theme.textSecondary)
         }
+        .foregroundStyle(focused ? Color.black : .white)
+        .padding(.horizontal, 20 * s)
+        .frame(height: 64 * s)
+        .background(focused ? Color.white : Theme.tile.opacity(choice.installed ? 0.5 : 0.9))
+        .opacity(choice.installed ? 0.6 : 1)
+        .focusFrame(focused, scale: s, radius: 4)
+        .contentShape(Rectangle())
+        .onTapGesture { if !choice.installed { model.tapSetup(.choice(index)) } }
+    }
+
+    private func hint(_ text: String, _ s: CGFloat) -> some View {
+        Text(text)
+            .font(.system(size: 16 * s))
+            .foregroundStyle(Theme.textSecondary)
     }
 
     // MARK: Visual C++
@@ -373,15 +369,5 @@ struct SetupView: View {
         .focusFrame(focused, scale: s, radius: 4)
         .contentShape(Rectangle())
         .onTapGesture { model.tapSetup(item) }
-    }
-}
-
-private extension SetupItem {
-    /// A stable ID for ForEach.
-    var key: String {
-        switch self {
-        case .useExisting(let i): return "existing-\(i)"
-        default: return String(describing: self)
-        }
     }
 }

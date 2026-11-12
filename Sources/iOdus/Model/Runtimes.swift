@@ -404,7 +404,7 @@ extension AppModel {
             return
         }
         let shim = GameRuntime.standard.componentFolder.appendingPathComponent("compat/highball-d3d12-shim.dll")
-        if download.d3dmetal != nil, !FileManager.default.fileExists(atPath: shim.path) {
+        if download.d3dmetal?.needsLayer == true, !FileManager.default.fileExists(atPath: shim.path) {
             throw RuntimeInstallError.badPackage("This build of iOdus has no d3d12 layer for D3DMetal 4.")
         }
         let temp = FileManager.default.temporaryDirectory

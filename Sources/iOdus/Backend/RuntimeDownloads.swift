@@ -9,6 +9,10 @@ struct D3DMetalPackage: Sendable, Equatable {
     let sha256: String
     let size: Int64
     let folder: String                  // The top folder in the archive
+
+    /// 3 or 4. D3DMetal 4 needs the d3d12.dll layer (shader model, enhanced barriers).
+    var major: Int { Int(version.prefix { $0.isNumber }) ?? 0 }
+    var needsLayer: Bool { major >= 4 }
 }
 
 /// One release file of a native arm64 (FEX) runtime.
@@ -53,18 +57,37 @@ struct RuntimeDownload: Sendable, Equatable, Identifiable {
     var fex: FEXPackage? = nil
 
     var displayName: String { "\(name) (Wine \(wineVersion))" }
+    /// The size of all files of the download.
+    var downloadBytes: Int64 {
+        if let fex { return fex.archives.reduce(0) { $0 + $1.size } }
+        return size + (d3dmetal?.size ?? 0)
+    }
     var neededBytes: Int64 {
         if let fex { return fex.archives.reduce(0) { $0 + $1.size } + unpackedBytes }
         return size + unpackedBytes + (d3dmetal?.size ?? 0) * 3
     }
-    var isBeta: Bool { d3dmetal != nil || fex != nil }
+    var isBeta: Bool { (d3dmetal?.needsLayer ?? false) || fex != nil }
     var family: RuntimeFamily { fex == nil ? .d3dmetal : .fex }
 
-    static let crossover = RuntimeDownload(
-        id: "crossover-26.3", name: "CrossOver 26.3 Wine", wineVersion: "11.0", release: 6,
-        url: URL(string: "https://github.com/burghr/iOdus/releases/download/v0.1.8/crossover-26.3-6.tar.xz")!,
-        sha256: "aff0279fd1026e4463ae3e2ab1da2bf056ca673e94de2ef6fc75cc1732cbd41d",
-        size: 277_365_752, unpackedBytes: 1_600_000_000)
+    /// The Wine 11 runtime, with D3DMetal 3 from the iOdus release: no Game Porting
+    /// Toolkit is needed.
+    static let crossover: RuntimeDownload = {
+        var download = RuntimeDownload(
+            id: "crossover-26.3", name: "CrossOver 26.3 Wine", wineVersion: "11.0", release: 6,
+            url: URL(string: "https://github.com/burghr/iOdus/releases/download/v0.1.8/crossover-26.3-6.tar.xz")!,
+            sha256: "aff0279fd1026e4463ae3e2ab1da2bf056ca673e94de2ef6fc75cc1732cbd41d",
+            size: 277_365_752, unpackedBytes: 1_600_000_000)
+        download.d3dmetal = d3dmetal3
+        return download
+    }()
+
+    /// Apple's D3DMetal 3.0 from Game Porting Toolkit 3.0, unchanged, with Apple's notices
+    /// (scripts/package-d3dmetal.sh).
+    static let d3dmetal3 = D3DMetalPackage(
+        version: "3.0",
+        url: URL(string: "https://github.com/burghr/iOdus/releases/download/v0.1.12/d3dmetal-3.0.tar.xz")!,
+        sha256: "03a1138672951e713e8e64a9f7498130f2cd171d184911d95aacf1e533b52e75",
+        size: 15_632_708, folder: "d3dmetal-3.0")
 
     /// The D3DMetal 4 beta runtime: the same Wine package, with D3DMetal 4 from
     /// Game Porting Toolkit 4 and the d3d12.dll layer. Forza Horizon 6 needs it.
@@ -149,9 +172,11 @@ struct RuntimeDownload: Sendable, Equatable, Identifiable {
     /// archive. The file <archive>.sha256 must hold its SHA-256, so the check still runs.
     static let localArchive: RuntimeDownload? = {
         guard let (file, size, sha) = localFile(after: "--runtime-archive") else { return nil }
-        return RuntimeDownload(id: crossover.id, name: crossover.name, wineVersion: crossover.wineVersion,
-                               release: crossover.release, url: file, sha256: sha, size: size,
-                               unpackedBytes: crossover.unpackedBytes)
+        var download = RuntimeDownload(id: crossover.id, name: crossover.name, wineVersion: crossover.wineVersion,
+                                       release: crossover.release, url: file, sha256: sha, size: size,
+                                       unpackedBytes: crossover.unpackedBytes)
+        download.d3dmetal = crossover.d3dmetal
+        return download
     }()
 }
 
@@ -203,15 +228,15 @@ enum RuntimeInstaller {
             throw RuntimeInstallError.badPackage("Wine is missing.")
         }
         if let package = download.d3dmetal {
-            guard let d3dmetalArchive, let shim else {
+            guard let d3dmetalArchive, !package.needsLayer || shim != nil else {
                 throw RuntimeInstallError.badPackage("The D3DMetal package or the d3d12 layer is missing.")
             }
             let unpacked = staging.appendingPathComponent("d3dmetal", isDirectory: true)
             try fm.createDirectory(at: unpacked, withIntermediateDirectories: false)
             try RuntimeSetup.run("/usr/bin/tar", ["-xf", d3dmetalArchive.path, "-C", unpacked.path])
             let root = unpacked.appendingPathComponent(package.folder, isDirectory: true)
-            manifest = try addD3DMetal4(from: root, shim: shim, to: folder, manifest: manifest,
-                                        id: download.id, name: download.name)
+            manifest = try addD3DMetalPackage(from: root, major: package.major, shim: package.needsLayer ? shim : nil,
+                                              to: folder, manifest: manifest, id: download.id, name: download.name)
         } else if let files = manifest.d3dmetal {
             try addD3DMetal(files, from: gptkWine, to: folder)
         }
@@ -362,18 +387,30 @@ enum RuntimeInstaller {
     /// Apple's license files, and runtime.json with the new ID.
     static func addD3DMetal4(from package: URL, shim: URL, to runtime: URL, manifest: RuntimeManifest,
                              id: String, name: String) throws -> RuntimeManifest {
+        try addD3DMetalPackage(from: package, major: 4, shim: shim, to: runtime, manifest: manifest, id: id, name: name)
+    }
+
+    /// Puts D3DMetal from an unpacked D3DMetal package into a runtime folder: Apple's
+    /// signed framework and redist files, unchanged, Apple's license files, and
+    /// runtime.json. With a d3d12.dll layer (D3DMetal 4), Apple's d3d12.dll gets a
+    /// new name and the layer takes its place; D3DMetal 3 needs no layer.
+    static func addD3DMetalPackage(from package: URL, major: Int, shim: URL?, to runtime: URL, manifest: RuntimeManifest,
+                                   id: String, name: String) throws -> RuntimeManifest {
         let fm = FileManager.default
         let redist = package.appendingPathComponent("redist", isDirectory: true)
         let framework = redist.appendingPathComponent("lib/external/D3DMetal.framework")
-        guard fm.fileExists(atPath: framework.path), fm.fileExists(atPath: shim.path) else {
+        guard fm.fileExists(atPath: framework.path) else {
             throw RuntimeInstallError.badPackage("The D3DMetal package has no D3DMetal.framework.")
         }
-        // Apple's signature, and version 4.
+        if let shim, !fm.fileExists(atPath: shim.path) {
+            throw RuntimeInstallError.badPackage("The d3d12 layer is missing.")
+        }
+        // Apple's signature, and the major version.
         do { try RuntimeSetup.run("/usr/bin/codesign", ["--verify", "--strict", "-R=anchor apple", framework.path]) }
         catch { throw RuntimeInstallError.badPackage("D3DMetal in the package is not signed by Apple.") }
         let info = NSDictionary(contentsOf: framework.appendingPathComponent("Versions/A/Resources/Info.plist"))
-        guard let version = info?["CFBundleShortVersionString"] as? String, version.hasPrefix("4.") else {
-            throw RuntimeInstallError.badPackage("The package does not have D3DMetal 4.")
+        guard let version = info?["CFBundleShortVersionString"] as? String, version.hasPrefix("\(major).") else {
+            throw RuntimeInstallError.badPackage("The package does not have D3DMetal \(major).")
         }
 
         let target = runtime.appendingPathComponent("lib/external", isDirectory: true)
@@ -384,7 +421,7 @@ enum RuntimeInstaller {
         let so = runtime.appendingPathComponent("lib/wine/x86_64-unix", isDirectory: true)
         for name in try fm.contentsOfDirectory(atPath: redist.appendingPathComponent("lib/wine/x86_64-windows").path)
         where name.hasSuffix(".dll") && isPlainName(name) {
-            let to = pe.appendingPathComponent(name == "d3d12.dll" ? renamedD3D12 : name)
+            let to = pe.appendingPathComponent(name == "d3d12.dll" && shim != nil ? renamedD3D12 : name)
             try? fm.removeItem(at: to)
             try fm.copyItem(at: redist.appendingPathComponent("lib/wine/x86_64-windows/\(name)"), to: to)
             windows.append(to.lastPathComponent)
@@ -399,13 +436,15 @@ enum RuntimeInstaller {
             unix.append(name)
         }
         // The layer in front of Apple's d3d12.dll, and the .so link for the renamed file.
-        let layer = pe.appendingPathComponent("d3d12.dll")
-        try? fm.removeItem(at: layer)
-        try fm.copyItem(at: shim, to: layer)
-        let renamedSo = so.appendingPathComponent("d3d12_d3dmetal.so")
-        try? fm.removeItem(at: renamedSo)
-        try fm.createSymbolicLink(atPath: renamedSo.path, withDestinationPath: "../../external/libd3dshared.dylib")
-        windows.append("d3d12.dll"); unix.append("d3d12_d3dmetal.so")
+        if let shim {
+            let layer = pe.appendingPathComponent("d3d12.dll")
+            try? fm.removeItem(at: layer)
+            try fm.copyItem(at: shim, to: layer)
+            let renamedSo = so.appendingPathComponent("d3d12_d3dmetal.so")
+            try? fm.removeItem(at: renamedSo)
+            try fm.createSymbolicLink(atPath: renamedSo.path, withDestinationPath: "../../external/libd3dshared.dylib")
+            windows.append("d3d12.dll"); unix.append("d3d12_d3dmetal.so")
+        }
 
         // Apple's license and notices go with every copy (license section 2A).
         let licenses = runtime.appendingPathComponent("LICENSES/D3DMetal", isDirectory: true)
@@ -418,10 +457,12 @@ enum RuntimeInstaller {
         var m = manifest
         m.id = id
         m.name = name
-        var environment = m.environment ?? [:]
-        environment["D3DM_MTL4"] = "0"
-        environment["WINE_BUILTIN_BY_FILE_NAME"] = renamedD3D12
-        m.environment = environment
+        if shim != nil {
+            var environment = m.environment ?? [:]
+            environment["D3DM_MTL4"] = "0"
+            environment["WINE_BUILTIN_BY_FILE_NAME"] = renamedD3D12
+            m.environment = environment
+        }
         m.d3dmetal = D3DMetalFiles(windows: windows.sorted(), unix: unix.sorted())
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

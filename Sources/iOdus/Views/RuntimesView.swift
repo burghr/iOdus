@@ -146,6 +146,9 @@ struct RuntimeRowView: View {
             if let fex = d.fex {
                 return "\(what) · \(Bytes.text(fex.archives.reduce(0) { $0 + $1.size })) download · native Apple silicon, beta"
             }
+            if let package = d.d3dmetal {
+                return "\(what) · \(Bytes.text(d.size + package.size)) download · with Apple's D3DMetal \(package.version)"
+            }
             return "\(what) · \(Bytes.text(d.size)) download · uses D3DMetal from your Game Porting Toolkit"
         }
     }

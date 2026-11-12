@@ -109,35 +109,27 @@ enum Snapshot {
             default: break
             }
         case "setup-rosetta":
-            model.setup = SetupFlow(steps: [.rosetta, .runtime], rosetta: .missing)
-        case "setup-runtime":
-            var flow = SetupFlow(steps: [.rosetta, .runtime], index: 1, rosetta: .installed)
-            flow.focus = 2
+            model.setup = SetupFlow(steps: [.rosetta, .runtimes], rosetta: .missing)
+        case "setup-runtime", "setup-fresh", "setup-wine":
+            // The first start: the list of runtimes, the recommended one checked.
+            var flow = SetupFlow(steps: [.rosetta, .runtimes, .vcRuntime], index: 1, rosetta: .installed)
+            flow.choices = model.setupChoices()
             model.setup = flow
-        case "setup-fresh":
-            // The first start: one step, nothing accepted, the Download button in focus.
-            var flow = SetupFlow(steps: [.runtime], rosetta: .installed)
-            flow.focus = 2
+        case "setup-download", "setup-wine-download":
+            var flow = SetupFlow(steps: [.rosetta, .runtimes, .vcRuntime], index: 1, rosetta: .installed,
+                                 licenseAccepted: true)
+            flow.choices = model.setupChoices()
+            if flow.choices.count > 2 { flow.choices[2].checked = true }
+            flow.queue = flow.checkedChoices
+            flow.current = flow.queue.first
+            flow.runtime = .downloading(done: 120_000_000, total: flow.choices[0].size)
             model.setup = flow
-        case "setup-wine", "setup-wine-download", "setup-vc":
-            var flow = SetupFlow(steps: [.rosetta, .runtime, .wineRuntime, .vcRuntime],
-                                 index: screen == "setup-vc" ? 3 : 2, rosetta: .installed)
-            flow.wineDownload = RuntimeDownload.catalog.first
-            if screen == "setup-wine-download" {
-                flow.runtime = .downloading(done: 120_000_000, total: RuntimeDownload.crossover.size)
-            }
-            model.setup = flow
-        case "setup-existing":
-            var flow = SetupFlow(steps: [.runtime], rosetta: .installed, licenseAccepted: true)
-            flow.existing = [ExistingGPTK(app: URL(fileURLWithPath: "/Applications/Game Porting Toolkit.app"), version: "3.0-3")]
-            flow.focus = 2
-            model.setup = flow
-        case "setup-download":
-            var flow = SetupFlow(steps: [.runtime], rosetta: .installed, licenseAccepted: true)
-            flow.runtime = .downloading(done: 98_000_000, total: GPTKRelease.pinned.size)
+        case "setup-vc":
+            var flow = SetupFlow(steps: [.rosetta, .runtimes, .vcRuntime], index: 2, rosetta: .installed)
+            flow.choices = model.setupChoices()
             model.setup = flow
         case "setup-intel":
-            model.setup = SetupFlow(steps: [.runtime], rosetta: .notAppleSilicon)
+            model.setup = SetupFlow(steps: [.runtimes], rosetta: .notAppleSilicon)
         case "saveconflict":
             let game = model.games[1]
             model.stack = [.home, .detail(game.id)]
