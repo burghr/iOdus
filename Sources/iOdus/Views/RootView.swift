@@ -363,7 +363,8 @@ struct RootContent: View {
                 : [.init(.a, "Restore"), .init(.b, "Back"), .init(.x, "Delete")]
         case .runtimes(let id):
             let rows = model.runtimeRows(for: id)
-            if model.runtimeIndex < rows.count, case .available = rows[model.runtimeIndex] {
+            if model.runtimeIndex == -1 { return [.init(.a, "Switch"), .init(.b, "Back")] }
+            if model.runtimeIndex >= 0, model.runtimeIndex < rows.count, case .available = rows[model.runtimeIndex] {
                 return [.init(.a, "Download"), .init(.b, "Back")]
             }
             return id == nil ? [.init(.a, "Set as default"), .init(.b, "Back"), .init(.x, "Prepare again")]

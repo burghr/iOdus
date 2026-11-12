@@ -10,11 +10,17 @@
 # never an installed game file. Without it, Forza Horizon 6 stops with E:0-17-4.
 set -u
 REAL=${IODUS_REAL_WINE:?IODUS_REAL_WINE is not set}
-# macOS removes DYLD_* variables when it starts /bin/sh. Wine needs this one
-# for GnuTLS and FreeType, so iOdus passes a copy.
+# macOS removes DYLD_* variables when it starts /bin/sh. Wine needs them: the
+# library path for GnuTLS and FreeType, and on the native arm64 runtimes also the
+# framework path for GStreamer (videos through Media Foundation). iOdus passes
+# a copy of each as IODUS_DYLD_*.
 if [ -n "${IODUS_DYLD_FALLBACK_LIBRARY_PATH:-}" ]; then
   DYLD_FALLBACK_LIBRARY_PATH=$IODUS_DYLD_FALLBACK_LIBRARY_PATH
   export DYLD_FALLBACK_LIBRARY_PATH
+fi
+if [ -n "${IODUS_DYLD_FALLBACK_FRAMEWORK_PATH:-}" ]; then
+  DYLD_FALLBACK_FRAMEWORK_PATH=$IODUS_DYLD_FALLBACK_FRAMEWORK_PATH
+  export DYLD_FALLBACK_FRAMEWORK_PATH
 fi
 EXE=${1:-}
 STAGED=0

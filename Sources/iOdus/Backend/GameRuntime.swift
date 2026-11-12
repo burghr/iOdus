@@ -18,6 +18,16 @@ struct RuntimeManifest: Codable, Equatable, Sendable {
     var release: Int?                   // The package release; a higher one is an update
     var d3dmetal: D3DMetalFiles?        // Apple's files that iOdus copies from the installed GPTK
     var inputGate: Bool?                // The controller driver honors C:\.iodus-input-gate (see InputGate)
+    var overlay: RuntimeOverlay?        // iOdus DLLs that come before Wine's own DLLs (native arm64 runtimes)
+    var signedLoader: String?           // Path that must link to the app's signed Wine loader (native arm64 runtimes)
+}
+
+/// iOdus DLLs in a DLL folder that Wine searches before its own DLLs
+/// (WINEDLLPATH_PREPEND of the Highball arm64 engine). An x86-64 game loads
+/// these x86-64 builds through the emulator, in place of Wine's own builtins.
+struct RuntimeOverlay: Codable, Equatable, Sendable {
+    var folder: String                  // "xbox/wine/aarch64-windows", relative to the runtime folder
+    var files: [String: String]         // file name in the folder -> iOdus DLL ("wintypes.dll": "iodus_wintypes.dll")
 }
 
 /// The D3DMetal files of a runtime. They are not in the runtime package: iOdus
@@ -51,6 +61,11 @@ struct GameRuntime: Sendable, Equatable {
     /// True when the controller driver of the runtime stops the game input while
     /// the gate file exists (the iOdus overlay is open). GPTK Wine 7.7 has no gate.
     var inputGate = false
+    /// The overlay folder and its files (file name -> iOdus DLL), if the runtime has one.
+    var overlayFolder: URL?
+    var overlayFiles: [String: String] = [:]
+    /// The path in the runtime that must be a link to the app's signed Wine loader.
+    var signedLoaderLink: URL?
 
     /// The gate file: while it exists, the game gets no controller input.
     var inputGateFile: URL { prefix.appendingPathComponent("drive_c/.iodus-input-gate") }
@@ -109,9 +124,17 @@ struct GameRuntime: Sendable, Equatable {
                     componentNames: m.components.filter { components.contains($0) },
                     overrides: m.overrides.sorted { $0.key < $1.key }.map { ($0.key, $0.value) },
                     register: m.register ?? [], propertySet: m.propertySet,
-                    extraEnvironment: (m.environment ?? [:]).mapValues { $0.replacingOccurrences(of: "{root}", with: root.path) },
-                    componentRoot: componentRoot, usesBundle: usesBundle, inputGate: m.inputGate ?? false)
+                    extraEnvironment: (m.environment ?? [:]).mapValues {
+                        $0.replacingOccurrences(of: "{root}", with: root.path).replacingOccurrences(of: "{prefix}", with: prefix.path)
+                    },
+                    componentRoot: componentRoot, usesBundle: usesBundle, inputGate: m.inputGate ?? false,
+                    overlayFolder: m.overlay.map { root.appendingPathComponent($0.folder, isDirectory: true) },
+                    overlayFiles: (m.overlay?.files ?? [:]).filter { components.contains($0.value) && RuntimeCatalog.isValidID($0.key) },
+                    signedLoaderLink: m.signedLoader.map { root.appendingPathComponent($0) })
     }
+
+    /// A runtime that starts through the app's signed loader is a native arm64 (FEX) runtime.
+    var family: RuntimeFamily { signedLoaderLink == nil ? .d3dmetal : .fex }
 
     /// "Game Porting Toolkit 3.0 (Wine 7.7)"
     var displayName: String { "\(name) (Wine \(wineVersion))" }
@@ -129,6 +152,52 @@ struct GameRuntime: Sendable, Equatable {
         return url
     }
     var marker: URL { prefix.appendingPathComponent(".iodus-runtime") }
+
+    /// The signed Wine loader of the app (Contents/Helpers/WineLoader.app). Only a
+    /// loader with Apple's cross-architecture entitlement can run x86-64 code in a
+    /// native arm64 Wine. IODUS_WINE_LOADER names one for a development build.
+    static var signedLoader: URL? {
+        let fm = FileManager.default
+        let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/WineLoader.app/Contents/MacOS/wine")
+        if fm.isExecutableFile(atPath: helper.path) { return helper }
+        if let path = ProcessInfo.processInfo.environment["IODUS_WINE_LOADER"], fm.isExecutableFile(atPath: path) {
+            return URL(fileURLWithPath: path)
+        }
+        return nil
+    }
+
+    /// Points the runtime's loader link at the app's signed loader. The app can
+    /// move or change, so this runs before each start. Returns true when it changed the link.
+    @discardableResult
+    func linkSignedLoader(to loader: URL? = GameRuntime.signedLoader) throws -> Bool {
+        guard let link = signedLoaderLink, let loader else { return false }
+        let fm = FileManager.default
+        if (try? fm.destinationOfSymbolicLink(atPath: link.path)) == loader.path { return false }
+        if (try? fm.attributesOfItem(atPath: link.path)) != nil || (try? fm.destinationOfSymbolicLink(atPath: link.path)) != nil {
+            try fm.removeItem(at: link)
+        }
+        try fm.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fm.createSymbolicLink(at: link, withDestinationURL: loader)
+        return true
+    }
+
+    /// Copies the iOdus DLLs of the overlay from the app when they are missing or
+    /// different (a new app version). Returns true when it changed a file.
+    @discardableResult
+    func updateOverlay() throws -> Bool {
+        guard let overlayFolder, !overlayFiles.isEmpty else { return false }
+        let fm = FileManager.default
+        try fm.createDirectory(at: overlayFolder, withIntermediateDirectories: true)
+        var changed = false
+        for (file, component) in overlayFiles.sorted(by: { $0.key < $1.key }) {
+            let data = try Data(contentsOf: componentFolder.appendingPathComponent(component))
+            let target = overlayFolder.appendingPathComponent(file)
+            if let installed = try? Data(contentsOf: target), installed == data { continue }
+            try data.write(to: target, options: .atomic)
+            changed = true
+        }
+        return changed
+    }
 
     /// The d3d12.dll layer of the app (RuntimeInstaller.addD3DMetal4).
     var d3d12LayerSource: URL { componentFolder.appendingPathComponent("compat/highball-d3d12-shim.dll") }
@@ -153,8 +222,21 @@ struct GameRuntime: Sendable, Equatable {
 
     /// Why the runtime cannot start games, or nil when all parts exist.
     var problem: String? {
+        problem(signedLoader: Self.signedLoader)
+    }
+
+    /// The problem with a given signed loader of the app (a test passes its own).
+    func problem(signedLoader: URL?) -> String? {
         let fm = FileManager.default
-        if !fm.isExecutableFile(atPath: wine64.path) {
+        if signedLoaderLink != nil {
+            // The Wine program goes through the loader link, which iOdus makes at the start.
+            if signedLoader == nil {
+                return "This build of iOdus has no signed Wine loader, so it cannot start native arm64 runtimes."
+            }
+            if !fm.isExecutableFile(atPath: wineserver.path) {
+                return "The Wine of \(displayName) is missing in \(root.path)."
+            }
+        } else if !fm.isExecutableFile(atPath: wine64.path) {
             return id == Self.gptkID ? "The Game Porting Toolkit Wine is missing in \(root.path)."
                 : "The Wine of \(displayName) is missing in \(root.path)."
         }
@@ -191,7 +273,7 @@ struct GameRuntime: Sendable, Equatable {
     }
 
     /// The environment for Wine and for `xodus-cli run`.
-    func environment(extra: [String: String] = [:]) -> [String: String] {
+    func environment(extra: [String: String] = [:], removing: [String] = []) -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         env["WINEPREFIX"] = prefix.path
         env["WINEDEBUG"] = env["IODUS_WINEDEBUG"] ?? "-all"
@@ -207,6 +289,7 @@ struct GameRuntime: Sendable, Equatable {
         }
         for (key, value) in extraEnvironment { env[key] = value }
         for (key, value) in extra { env[key] = value }
+        for key in removing { env[key] = nil }
         return env
     }
 
@@ -223,6 +306,8 @@ struct GameRuntime: Sendable, Equatable {
         let fm = FileManager.default
         try fm.createDirectory(at: prefix, withIntermediateDirectories: true)
 
+        try linkSignedLoader()
+        try updateOverlay()
         log("Preparing the Wine prefix")
         // Without Wine Mono and Wine Gecko, wineboot asks to download them in a
         // dialog. GDK games are native programs and need neither (.NET, web views).
@@ -242,7 +327,10 @@ struct GameRuntime: Sendable, Equatable {
             try await wine(["reg", "add", #"HKCU\Software\Wine\DllOverrides"#, "/v", dll, "/d", value, "/f"])
         }
         // /s: no message box ("Successfully registered DLL") on newer Wine.
-        for dll in register { try await wine(["regsvr32", "/s", dll]) }
+        // regsvr32 is a native program: it registers Wine's own DLL, not the x86-64 one of the overlay.
+        for dll in register {
+            try await wine(["regsvr32", "/s", dll], removing: overlayFolder == nil ? [] : ["WINEDLLPATH_PREPEND"])
+        }
         if let propertySet {
             try await wine(["reg", "add",
                             #"HKLM\Software\Microsoft\WindowsRuntime\ActivatableClassId\Windows.Foundation.Collections.PropertySet"#,
@@ -284,8 +372,9 @@ struct GameRuntime: Sendable, Equatable {
         _ = try await XodusCLI.runProcess(wineserver, ["-w"], environment: environment(), timeout: 60)
     }
 
-    func wine(_ arguments: [String], extra: [String: String] = [:]) async throws {
-        let result = try await XodusCLI.runProcess(wine64, arguments, environment: environment(extra: extra), timeout: 300)
+    func wine(_ arguments: [String], extra: [String: String] = [:], removing: [String] = []) async throws {
+        let result = try await XodusCLI.runProcess(wine64, arguments, environment: environment(extra: extra, removing: removing),
+                                                   timeout: 300)
         if result.timedOut { throw BackendError.failed("Wine did not finish \(arguments[0]) in time.") }
         guard result.status == 0 else {
             throw BackendError.failed("Wine \(arguments[0]) failed: \(XodusCLI.message(from: result.stderr))")

@@ -24,16 +24,30 @@ struct RuntimesView: View {
                 .font(.system(size: 18 * s))
                 .foregroundStyle(Theme.textSecondary)
                 .padding(.bottom, 10 * s)
+            // The top box: the technology. The box below: its runtimes.
+            RuntimeFamilyBox(selected: model.runtimeFamily, focused: model.runtimeIndex == -1, scale: s) { family in
+                model.selectRuntimeFamily(family)
+            }
+            Text(model.runtimeFamily.detail)
+                .font(.system(size: 17 * s))
+                .foregroundStyle(Theme.textSecondary)
+                .padding(.bottom, 6 * s)
             let rows = model.runtimeRows(for: gameID)
-            let selected = model.selectedRuntimeRow(for: gameID)
+            let inUse = model.runtimeRowInUse(for: gameID)
             VStack(alignment: .leading, spacing: 10 * s) {
                 ForEach(Array(rows.enumerated()), id: \.offset) { i, row in
-                    RuntimeRowView(row: row, defaultRuntime: model.defaultRuntime, selected: i == selected,
+                    RuntimeRowView(row: row, defaultRuntime: model.defaultRuntime, selected: i == inUse,
                                    download: model.runtimeDownload, release: rowRelease(row), scale: s)
                         .frame(height: 86 * s)
                         .focusFrame(model.runtimeIndex == i, scale: s)
                         .contentShape(Rectangle())
                         .onTapGesture { model.tapRuntime(i) }
+                }
+                if rows.isEmpty {
+                    Text("No runtime of this kind is available on this Mac.")
+                        .font(.system(size: 18 * s))
+                        .foregroundStyle(Theme.textSecondary)
+                        .padding(.vertical, 20 * s)
                 }
             }
             Spacer(minLength: 0)
@@ -131,5 +145,33 @@ struct RuntimeRowView: View {
             let what = release.map { "Release \(d.release) (installed: \($0))" } ?? "Not installed"
             return "\(what) · \(Bytes.text(d.size)) download · uses D3DMetal from your Game Porting Toolkit"
         }
+    }
+}
+
+/// The technology choice at the top of the runtimes page: two parts side by side.
+/// Left and right (or a click) switch it; the list below shows that technology.
+struct RuntimeFamilyBox: View {
+    let selected: RuntimeFamily
+    let focused: Bool
+    let scale: CGFloat
+    let choose: (RuntimeFamily) -> Void
+
+    var body: some View {
+        let s = scale
+        HStack(spacing: 0) {
+            ForEach(RuntimeFamily.allCases, id: \.self) { family in
+                let on = family == selected
+                Text(family.title)
+                    .font(.system(size: 20 * s, weight: on ? .semibold : .regular))
+                    .foregroundStyle(on ? Theme.textPrimary : Theme.textSecondary)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 56 * s)
+                    .background(on ? Theme.accent.opacity(0.85) : Color.clear)
+                    .contentShape(Rectangle())
+                    .onTapGesture { choose(family) }
+            }
+        }
+        .background(Theme.tile.opacity(0.9))
+        .focusFrame(focused, scale: s)
     }
 }
