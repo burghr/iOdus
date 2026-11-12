@@ -5,8 +5,9 @@ import Foundation
 /// iOdus makes later gets it during its setup (AppSettings.vcRuntimeWanted).
 extension AppModel {
     /// The runtimes whose prefix exists (the others get the runtime at their setup).
+    /// The native arm64 runtimes use Wine's own C++ runtime (GameRuntime.installsVCRuntime).
     private var preparedRuntimes: [GameRuntime] {
-        runtimes.filter { FileManager.default.fileExists(atPath: VCRuntime.system32($0.prefix).path) }
+        runtimes.filter { $0.installsVCRuntime && FileManager.default.fileExists(atPath: VCRuntime.system32($0.prefix).path) }
     }
 
     /// (runtimes with Microsoft's runtime, runtimes with a prefix)

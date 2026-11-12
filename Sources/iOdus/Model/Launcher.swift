@@ -97,7 +97,7 @@ final class GameLauncher {
                     }
                 }
                 // The VC++ runtime that the player chose. A failure does not stop the game.
-                if AppSettings.vcRuntimeWanted, !VCRuntime.isInstalled(prefix: runtime.prefix) {
+                if AppSettings.vcRuntimeWanted, runtime.installsVCRuntime, !VCRuntime.isInstalled(prefix: runtime.prefix) {
                     state = .preparing(id: id, step: "Installing the Visual C++ runtime")
                     try? await runtime.installVCRuntime()
                 }

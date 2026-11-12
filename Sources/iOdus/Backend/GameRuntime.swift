@@ -136,6 +136,12 @@ struct GameRuntime: Sendable, Equatable {
     /// A runtime that starts through the app's signed loader is a native arm64 (FEX) runtime.
     var family: RuntimeFamily { signedLoaderLink == nil ? .d3dmetal : .fex }
 
+    /// Whether iOdus installs Microsoft's Visual C++ runtime in the prefix. Not on the
+    /// native arm64 runtimes: there the installer replaced only part of the C++ runtime
+    /// (msvcp140.dll stayed Wine's), and that mix hung Football Manager 27's copy
+    /// protection at its start. Wine's own C++ runtime works there.
+    var installsVCRuntime: Bool { family == .d3dmetal }
+
     /// "Game Porting Toolkit 3.0 (Wine 7.7)"
     var displayName: String { "\(name) (Wine \(wineVersion))" }
 

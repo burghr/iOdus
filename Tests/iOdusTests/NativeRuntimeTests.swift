@@ -129,6 +129,8 @@ final class NativeRuntimeTests: XCTestCase {
         XCTAssertEqual(RuntimeRow.available(RuntimeDownload.crossover).family, .d3dmetal)
         XCTAssertNil(RuntimeRow.useDefault.family)
         XCTAssertLessThan(RuntimeFamily.d3dmetal, RuntimeFamily.fex, "D3DMetal comes first")
+        XCTAssertTrue(rosetta.installsVCRuntime)
+        XCTAssertFalse(native.installsVCRuntime, "Wine's own C++ runtime on the native runtimes")
     }
 
     func testEnvironmentCanRemoveAVariable() throws {
