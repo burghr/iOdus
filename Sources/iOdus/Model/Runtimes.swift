@@ -73,6 +73,39 @@ enum RuntimeRow: Equatable {
     case useDefault                     // Game page only: the game uses the default
     case installed(GameRuntime)
     case available(RuntimeDownload)     // Settings only: not installed, or a newer release
+
+    /// The kind of runtime; nil for "Use the default".
+    var family: RuntimeFamily? {
+        switch self {
+        case .useDefault: return nil
+        case .installed(let runtime): return runtime.family
+        case .available(let download): return download.family
+        }
+    }
+}
+
+/// The two kinds of runtime. The Runtimes page shows them in two groups.
+enum RuntimeFamily: Int, CaseIterable, Comparable {
+    case d3dmetal   // x86-64 Wine through Rosetta 2, Direct3D through Apple's D3DMetal
+    case fex        // Native arm64 Wine, FEX for the game's x86-64 code, DXVK and vkd3d-proton on Vulkan
+
+    static func < (a: RuntimeFamily, b: RuntimeFamily) -> Bool { a.rawValue < b.rawValue }
+
+    var title: String {
+        switch self {
+        case .d3dmetal: return "D3DMetal · Rosetta 2"
+        case .fex: return "FEX · native Apple silicon (beta)"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .d3dmetal:
+            return "Rosetta 2 runs Wine and the game. Apple's D3DMetal draws Direct3D with Metal."
+        case .fex:
+            return "Wine runs natively. FEX runs the game's x86-64 code. DXVK and vkd3d-proton draw Direct3D through Vulkan."
+        }
+    }
 }
 
 /// A runtime download in progress.
@@ -140,33 +173,68 @@ extension AppModel {
     }
 
     func runtimeRows(for gameID: Game.ID?) -> [RuntimeRow] {
-        if gameID == nil {
-            return runtimes.map { .installed($0) } + availableDownloads.map { .available($0) }
-        }
-        return [.useDefault] + runtimes.map { .installed($0) }
+        runtimeRows(for: gameID, family: runtimeFamily)
     }
 
-    /// The row that the game or the default uses now.
-    func selectedRuntimeRow(for gameID: Game.ID?) -> Int {
+    /// The rows of one technology (the box under the technology choice).
+    func runtimeRows(for gameID: Game.ID?, family: RuntimeFamily) -> [RuntimeRow] {
+        let rows: [RuntimeRow] = gameID == nil
+            ? runtimes.map { .installed($0) } + availableDownloads.map { .available($0) }
+            : runtimes.map { .installed($0) }
+        let mine = rows.filter { $0.family == family }
+        return gameID == nil ? mine : [.useDefault] + mine
+    }
+
+    /// The runtime that the game or the default uses now.
+    func chosenRuntime(for gameID: Game.ID?) -> GameRuntime {
+        guard let gameID, let game = game(gameID) else { return defaultRuntime }
+        return runtime(for: game)
+    }
+
+    /// The row in use in the shown technology: "Use the default" for a game without its
+    /// own runtime, else the runtime in use. nil when it belongs to the other technology.
+    func runtimeRowInUse(for gameID: Game.ID?) -> Int? {
         let rows = runtimeRows(for: gameID)
-        let chosen = gameID.map { runtimeChoice.gameID($0) } ?? defaultRuntime.id
-        guard let chosen else { return 0 }
-        return rows.firstIndex { if case .installed(let r) = $0 { return r.id == chosen }; return false } ?? 0
+        guard let chosen = gameID.map({ runtimeChoice.gameID($0) }) ?? defaultRuntime.id else {
+            return rows.isEmpty ? nil : 0
+        }
+        return rows.firstIndex { if case .installed(let r) = $0 { return r.id == chosen }; return false }
+    }
+
+    /// The row that gets the focus when the page opens: the row in use, else the first row.
+    func selectedRuntimeRow(for gameID: Game.ID?) -> Int {
+        runtimeRowInUse(for: gameID) ?? (runtimeRows(for: gameID).isEmpty ? -1 : 0)
     }
 
     func openRuntimes(gameID: Game.ID?) {
         reloadRuntimes()
+        // The page opens on the technology of the runtime in use, with the focus on it.
+        runtimeFamily = chosenRuntime(for: gameID).family
         runtimeIndex = selectedRuntimeRow(for: gameID)
         stack.append(.runtimes(gameID))
+    }
+
+    /// Shows the runtimes of another technology (left, right, or a click in the top box).
+    func selectRuntimeFamily(_ family: RuntimeFamily) {
+        guard family != runtimeFamily, case .runtimes = screen else { return }
+        runtimeFamily = family
+        // The focus stays in the top box.
+        runtimeIndex = -1
     }
 
     func moveRuntimes(_ d: Direction) {
         guard case .runtimes(let gameID) = screen else { return }
         let count = runtimeRows(for: gameID).count
         switch d {
-        case .up: runtimeIndex = max(0, runtimeIndex - 1)
+        case .up: runtimeIndex = max(-1, runtimeIndex - 1)
         case .down: runtimeIndex = min(count - 1, runtimeIndex + 1)
-        default: break
+        case .left, .right:
+            // Left and right switch the technology in the top box only.
+            guard runtimeIndex == -1 else { return }
+            let all = RuntimeFamily.allCases
+            guard let i = all.firstIndex(of: runtimeFamily) else { return }
+            let next = d == .right ? min(all.count - 1, i + 1) : max(0, i - 1)
+            selectRuntimeFamily(all[next])
         }
     }
 
@@ -179,7 +247,13 @@ extension AppModel {
     func chooseRuntime() {
         guard case .runtimes(let gameID) = screen else { return }
         let rows = runtimeRows(for: gameID)
-        guard runtimeIndex < rows.count else { return }
+        if runtimeIndex == -1 {
+            // A in the top box: show the other technology.
+            let all = RuntimeFamily.allCases
+            if let i = all.firstIndex(of: runtimeFamily) { selectRuntimeFamily(all[(i + 1) % all.count]) }
+            return
+        }
+        guard runtimeIndex >= 0, runtimeIndex < rows.count else { return }
         switch rows[runtimeIndex] {
         case .available(let download):
             downloadRuntime(download)
@@ -232,7 +306,7 @@ extension AppModel {
     func prepareFocusedRuntime() {
         guard case .runtimes(nil) = screen else { return }
         let rows = runtimeRows(for: nil)
-        guard runtimeIndex < rows.count, case .installed(let runtime) = rows[runtimeIndex] else { return }
+        guard runtimeIndex >= 0, runtimeIndex < rows.count, case .installed(let runtime) = rows[runtimeIndex] else { return }
         prepareRuntime(runtime)
     }
 
@@ -272,15 +346,52 @@ extension AppModel {
         FileManager.default.fileExists(atPath: RuntimeInstaller.gptkWine.appendingPathComponent("lib/external/D3DMetal.framework").path)
     }
 
+    /// A native arm64 runtime: three archives, one progress, then the install.
+    private func fetchFEXRuntime(_ download: RuntimeDownload, package: FEXPackage,
+                                 progress: @escaping @MainActor (Int64, Int64) -> Void,
+                                 installing: @escaping @MainActor () -> Void) async throws {
+        let temp = FileManager.default.temporaryDirectory
+        let files = package.archives.enumerated().map { i, archive in
+            temp.appendingPathComponent("iodus-\(download.id)-\(download.release)-\(i).tar.gz")
+        }
+        defer { for file in files { try? FileManager.default.removeItem(at: file) } }
+        let total = package.archives.reduce(0) { $0 + $1.size }
+        var before: Int64 = 0
+        for (archive, file) in zip(package.archives, files) {
+            try Task.checkCancellation()
+            let offset = before
+            try await RuntimeSetup.download(url: archive.url, size: archive.size, to: file) { done, _ in
+                Task { @MainActor in progress(offset + done, total) }
+            }
+            before += archive.size
+        }
+        try Task.checkCancellation()
+        installing()
+        let runtimesFolder = RuntimeCatalog.runtimesFolder
+        try await Task.detached {
+            for (archive, file) in zip(package.archives, files) {
+                try RuntimeSetup.verify(file, sha256: archive.sha256)
+            }
+            try RuntimeInstaller.installFEX(engine: files[0], renderers: files[1], kosmickrisp: files[2],
+                                            download: download, runtimes: runtimesFolder)
+        }.value
+        reloadRuntimes()
+    }
+
     /// Downloads, checks, and installs a runtime, then reloads the list.
     /// Settings and the setup use it. The archive is removed in all cases.
     func fetchRuntime(_ download: RuntimeDownload,
                       progress: @escaping @MainActor (Int64, Int64) -> Void,
                       installing: @escaping @MainActor () -> Void) async throws {
-        // A beta runtime brings its own D3DMetal; the others copy it from GPTK.
-        if download.d3dmetal == nil { guard gptkHasD3DMetal else { throw RuntimeInstallError.noGPTK } }
+        // A beta runtime brings its own D3DMetal; the others copy it from GPTK. A native
+        // arm64 (FEX) runtime has no D3DMetal.
+        if download.d3dmetal == nil, download.fex == nil { guard gptkHasD3DMetal else { throw RuntimeInstallError.noGPTK } }
         if let free = Bytes.freeSpace(at: GameRuntime.support), free < download.neededBytes {
             throw RuntimeSetupError.notEnoughSpace(needed: download.neededBytes, free: free)
+        }
+        if let fex = download.fex {
+            try await fetchFEXRuntime(download, package: fex, progress: progress, installing: installing)
+            return
         }
         let shim = GameRuntime.standard.componentFolder.appendingPathComponent("compat/highball-d3d12-shim.dll")
         if download.d3dmetal != nil, !FileManager.default.fileExists(atPath: shim.path) {

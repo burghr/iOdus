@@ -97,7 +97,7 @@ final class GameLauncher {
                     }
                 }
                 // The VC++ runtime that the player chose. A failure does not stop the game.
-                if AppSettings.vcRuntimeWanted, !VCRuntime.isInstalled(prefix: runtime.prefix) {
+                if AppSettings.vcRuntimeWanted, runtime.installsVCRuntime, !VCRuntime.isInstalled(prefix: runtime.prefix) {
                     state = .preparing(id: id, step: "Installing the Visual C++ runtime")
                     try? await runtime.installVCRuntime()
                 }
@@ -110,6 +110,9 @@ final class GameLauncher {
             // The d3d12.dll layer of this app version (D3DMetal 4 runtimes only).
             // If the copy fails, the game starts with the layer that the runtime has.
             _ = try? runtime.updateD3D12Layer()
+            // Native arm64 runtimes: the app's signed loader and its Xbox DLLs.
+            try runtime.linkSignedLoader()
+            _ = try? runtime.updateOverlay()
             // The game's Retina choice. A change restarts the Wine processes of the prefix.
             try await runtime.applyRetinaMode(options.retina)
             // Some games check the Gaming Services version in the registry.
@@ -270,9 +273,11 @@ final class GameLauncher {
         extra.merge(overlayMode.gameEnvironment) { _, new in new }
         var environment = runtime.environment(extra: extra)
         // macOS removes DYLD_* variables when it starts /bin/sh (a protected
-        // program), so iodus-wine-launch gets this copy and restores it for Wine.
-        if useLauncher, let dyld = environment["DYLD_FALLBACK_LIBRARY_PATH"] {
-            environment["IODUS_DYLD_FALLBACK_LIBRARY_PATH"] = dyld
+        // program), so iodus-wine-launch gets these copies and restores them for Wine.
+        if useLauncher {
+            for key in ["DYLD_FALLBACK_LIBRARY_PATH", "DYLD_FALLBACK_FRAMEWORK_PATH"] {
+                if let value = environment[key] { environment["IODUS_" + key] = value }
+            }
         }
         process.environment = environment
         process.standardOutput = handle

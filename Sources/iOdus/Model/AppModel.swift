@@ -110,7 +110,8 @@ final class AppModel: ObservableObject {
     @Published var runtimes: [GameRuntime] = RuntimeCatalog.discover()
     var runtimeChoice = RuntimeChoice(defaults: .standard)
     var gameOptions = GameOptionsStore(defaults: .standard)
-    @Published var runtimeIndex = 0
+    @Published var runtimeIndex = 0         // -1: the technology box at the top of the runtimes page
+    @Published var runtimeFamily: RuntimeFamily = .d3dmetal  // The technology the runtimes page shows
     /// The runtime download that runs now, and the downloads that iOdus offers.
     @Published var runtimeDownload: RuntimeDownloadState?
     var runtimeDownloadCatalog: [RuntimeDownload] = RuntimeDownload.catalog

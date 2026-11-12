@@ -11,6 +11,25 @@ struct D3DMetalPackage: Sendable, Equatable {
     let folder: String                  // The top folder in the archive
 }
 
+/// One release file of a native arm64 (FEX) runtime.
+struct FEXArchive: Sendable, Equatable {
+    let url: URL
+    let sha256: String
+    let size: Int64
+}
+
+/// The three release files of a native arm64 runtime, from the Highball arm64
+/// engine (https://github.com/gauthierpiarrette/highball-engine), hosted
+/// unchanged in an iOdus release: the engine (Wine 11.18 for Apple silicon with
+/// FEX), vkd3d-proton and DXVK, and KosmicKrisp with the Khronos Vulkan loader.
+/// RuntimeInstaller.installFEX makes the runtime folder from them.
+struct FEXPackage: Sendable, Equatable {
+    let engine: FEXArchive
+    let renderers: FEXArchive
+    let kosmickrisp: FEXArchive
+    var archives: [FEXArchive] { [engine, renderers, kosmickrisp] }
+}
+
 /// A runtime that iOdus can download: a release file of the iOdus repository,
 /// made by scripts/build-wine-runtime.sh (STAGE=package). The package has no
 /// D3DMetal; iOdus adds it from the installed Game Porting Toolkit, or from a
@@ -30,10 +49,16 @@ struct RuntimeDownload: Sendable, Equatable, Identifiable {
     var d3dmetal: D3DMetalPackage? = nil
     /// The oldest macOS major version that can run it (D3DMetal 4: macOS 27).
     var minimumMacOS: Int? = nil
+    /// A native arm64 runtime from three archives (url, sha256 and size are the engine's).
+    var fex: FEXPackage? = nil
 
     var displayName: String { "\(name) (Wine \(wineVersion))" }
-    var neededBytes: Int64 { size + unpackedBytes + (d3dmetal?.size ?? 0) * 3 }
-    var isBeta: Bool { d3dmetal != nil }
+    var neededBytes: Int64 {
+        if let fex { return fex.archives.reduce(0) { $0 + $1.size } + unpackedBytes }
+        return size + unpackedBytes + (d3dmetal?.size ?? 0) * 3
+    }
+    var isBeta: Bool { d3dmetal != nil || fex != nil }
+    var family: RuntimeFamily { fex == nil ? .d3dmetal : .fex }
 
     static let crossover = RuntimeDownload(
         id: "crossover-26.3", name: "CrossOver 26.3 Wine", wineVersion: "11.0", release: 6,
@@ -61,13 +86,43 @@ struct RuntimeDownload: Sendable, Equatable, Identifiable {
         return variant
     }
 
+    /// The native arm64 runtimes (FEX). The release files are Highball's, unchanged,
+    /// except the engine of the alpha runtime: Highball's r5 source with patch 0058
+    /// (burghr/highball-engine, branch iodus-alpha), until Highball has the fix.
+    static let fexRelease = "https://github.com/burghr/iOdus/releases/download/v0.1.9/"
+    static let fexRenderers = FEXArchive(
+        url: URL(string: fexRelease + "renderers-arm64-20261031T230303Z-manual.tar.gz")!,
+        sha256: "1b101d93ad23ec72a89216388f250afcbd9b64babb49f21cc5feccea05fbac37", size: 11_818_314)
+    static let fexKosmicKrisp = FEXArchive(
+        url: URL(string: fexRelease + "kosmickrisp-arm64-20261104T165852Z-push.tar.gz")!,
+        sha256: "c88f1067802569b6db055b83884d62bd178c11b778977501a545ed724520ecae", size: 2_544_432)
+
+    static let highballArm64 = fexRuntime(
+        id: "highball-arm64-r5", name: "Highball arm64 engine",
+        engine: FEXArchive(url: URL(string: fexRelease + "engine-arm64-wine-11.18-20261108T132317Z-spatial-0056-0057.tar.gz")!,
+                           sha256: "6721b1f4ee2665283f7c16e4e0b3cf5737c454399fac3d74657fde181d148f33", size: 402_959_865))
+    static let highballArm64Alpha = fexRuntime(
+        id: "highball-arm64-r5-alpha", name: "iOdus patched (alpha)",
+        engine: FEXArchive(url: URL(string: fexRelease + "engine-arm64-wine-11.18-20261112T050227Z-iodus-alpha-r5-0058.tar.gz")!,
+                           sha256: "a5b92ddcd9682dfb4d25312baca512fd2893e790ac7df8c0cd509d46b1a54376", size: 402_960_205))
+
+    static func fexRuntime(id: String, name: String, engine: FEXArchive, release: Int = 1) -> RuntimeDownload {
+        var download = RuntimeDownload(id: id, name: name, wineVersion: "11.18", release: release, url: engine.url,
+                                       sha256: engine.sha256, size: engine.size, unpackedBytes: 1_300_000_000)
+        download.fex = FEXPackage(engine: engine, renderers: fexRenderers, kosmickrisp: fexKosmicKrisp)
+        download.minimumMacOS = 27
+        return download
+    }
+
     /// The runtimes that the Runtimes page and the setup offer. A runtime that
-    /// needs a newer macOS is not offered.
+    /// needs a newer macOS is not offered, and the native arm64 runtimes only in
+    /// an app with the signed Wine loader.
     static var catalog: [RuntimeDownload] {
         let base = localArchive ?? crossover
         let beta = localD3DMetal.map { d3dmetal4Variant(of: base, d3dmetal: $0) } ?? crossoverD3DMetal4
         let macOS = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
-        return [base, beta].filter { ($0.minimumMacOS ?? 0) <= macOS }
+        let native = GameRuntime.signedLoader == nil ? [] : [highballArm64, highballArm64Alpha]
+        return ([base, beta] + native).filter { ($0.minimumMacOS ?? 0) <= macOS }
     }
 
     /// A test switch for a D3DMetal package that has no published release:
@@ -177,6 +232,94 @@ enum RuntimeInstaller {
             try fm.moveItem(at: target, to: old)
         }
         try fm.moveItem(at: folder, to: target)
+    }
+
+    /// Makes a native arm64 runtime from its three archives, as scripts/make-fex-runtime.sh
+    /// does: the engine, the renderers in renderers/, KosmicKrisp in renderers/kosmickrisp
+    /// with the Khronos loader as engine/lib/libMoltenVK.dylib, and runtime.json. The
+    /// engine's own ad-hoc signed loader goes; iOdus links its signed loader at the start.
+    static func installFEX(engine: URL, renderers: URL, kosmickrisp: URL, download: RuntimeDownload,
+                           runtimes: URL) throws {
+        let fm = FileManager.default
+        guard RuntimeCatalog.isValidID(download.id) else { throw RuntimeInstallError.badPackage("Bad runtime ID.") }
+        try fm.createDirectory(at: runtimes, withIntermediateDirectories: true)
+        let staging = runtimes.appendingPathComponent(".install-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: staging, withIntermediateDirectories: false)
+        defer { try? fm.removeItem(at: staging) }
+        let folder = staging.appendingPathComponent(download.id, isDirectory: true)
+        let parts = staging.appendingPathComponent("parts", isDirectory: true)
+        for dir in [folder, parts.appendingPathComponent("renderers"), parts.appendingPathComponent("kk")] {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        try RuntimeSetup.run("/usr/bin/tar", ["-xf", engine.path, "-C", folder.path])
+        guard fm.isExecutableFile(atPath: folder.appendingPathComponent("engine/bin/wineserver").path) else {
+            throw RuntimeInstallError.badPackage("The engine has no Wine.")
+        }
+        let loader = folder.appendingPathComponent("engine/lib/wine/aarch64-unix/wine")
+        let wine = folder.appendingPathComponent("engine/bin/wine")
+        try? fm.removeItem(at: loader)
+        try? fm.removeItem(at: wine)
+        try fm.createSymbolicLink(atPath: wine.path, withDestinationPath: "../lib/wine/aarch64-unix/wine")
+
+        let r = parts.appendingPathComponent("renderers")
+        try RuntimeSetup.run("/usr/bin/tar", ["-xf", renderers.path, "-C", r.path])
+        guard fm.fileExists(atPath: r.appendingPathComponent("renderers/vkd3d").path) else {
+            throw RuntimeInstallError.badPackage("The renderers are missing.")
+        }
+        try RuntimeSetup.run("/usr/bin/ditto", [r.appendingPathComponent("renderers").path,
+                                                folder.appendingPathComponent("renderers").path])
+        let k = parts.appendingPathComponent("kk")
+        try RuntimeSetup.run("/usr/bin/tar", ["-xf", kosmickrisp.path, "-C", k.path])
+        guard fm.fileExists(atPath: k.appendingPathComponent("lib/libMoltenVK.dylib").path) else {
+            throw RuntimeInstallError.badPackage("The Vulkan driver is missing.")
+        }
+        try RuntimeSetup.run("/usr/bin/ditto", [k.appendingPathComponent("renderers/kosmickrisp").path,
+                                                folder.appendingPathComponent("renderers/kosmickrisp").path])
+        let vulkan = folder.appendingPathComponent("engine/lib/libMoltenVK.dylib")
+        try? fm.removeItem(at: vulkan)
+        try fm.copyItem(at: k.appendingPathComponent("lib/libMoltenVK.dylib"), to: vulkan)
+        for (name, from) in [("renderers", r), ("kosmickrisp", k)] {
+            let source = from.appendingPathComponent("licenses")
+            guard fm.fileExists(atPath: source.path) else { continue }
+            try RuntimeSetup.run("/usr/bin/ditto", [source.path, folder.appendingPathComponent("LICENSES/\(name)").path])
+        }
+
+        let manifest = fexManifest(id: download.id, name: download.name, release: download.release)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        try encoder.encode(manifest).write(to: folder.appendingPathComponent("runtime.json"))
+        try finish(folder, download: download, runtimes: runtimes, staging: staging)
+    }
+
+    /// runtime.json of a native arm64 runtime (the same as scripts/make-fex-runtime.sh writes).
+    static func fexManifest(id: String, name: String, release: Int) -> RuntimeManifest {
+        RuntimeManifest(
+            id: id, name: name, wineVersion: "11.18", wine: "engine/bin/wine", wineserver: "engine/bin/wineserver",
+            libraries: "engine/lib",
+            components: ["xgameruntime.dll", "api-ms-win-core-psm-appnotify-l1-1-0.dll"],
+            overrides: ["api-ms-win-core-psm-appnotify-l1-1-0": "native"],
+            register: ["windows.web.dll"], propertySet: "wintypes.dll",
+            environment: [
+                "DYLD_FALLBACK_LIBRARY_PATH": "{root}/engine/lib:{root}/frameworks:{root}/frameworks/GStreamer.framework/Versions/1.0/lib",
+                "DYLD_FALLBACK_FRAMEWORK_PATH": "{root}/frameworks",
+                "GST_PLUGIN_PATH": "{root}/frameworks/GStreamer.framework/Versions/1.0/lib/gstreamer-1.0",
+                "VK_DRIVER_FILES": "{root}/renderers/kosmickrisp/kosmickrisp_icd.json",
+                "VK_LOADER_LAYERS_DISABLE": "~implicit~",
+                "MESA_SHADER_CACHE_DIR": "{prefix}/.mesa-cache",
+                "MESA_SHADER_CACHE_MAX_SIZE": "4G",
+                "WINEDLLPATH_PREPEND": "{root}/xbox/wine:{root}/renderers/vkd3d/wine",
+                "WINEDLLOVERRIDES": "dxgi,d3d11,d3d10core,d3d12,d3d12core=n,b",
+                "DXVK_RELAX_FEATURES": "1",
+                "VKD3D_RELAX_DEVICE_CAPS": "1",
+                "VKD3D_FEATURE_LEVEL": "12_0",
+                "VKD3D_SHADER_MODEL": "6_6",
+                "VKD3D_SHADER_CACHE_PATH": "C:\\vkd3d-cache",
+            ],
+            release: release, d3dmetal: nil, inputGate: nil,
+            overlay: RuntimeOverlay(folder: "xbox/wine/aarch64-windows",
+                                    files: ["windows.web.dll": "windows.web.dll", "twinapi.appcore.dll": "twinapi.appcore.dll",
+                                            "wintypes.dll": "iodus_wintypes.dll"]),
+            signedLoader: "engine/lib/wine/aarch64-unix/wine")
     }
 
     /// Copies Apple's D3DMetal from GPTK into a runtime folder, in the GPTK layout:
