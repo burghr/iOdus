@@ -33,6 +33,20 @@ final class UnityDisplayTests: XCTestCase {
         XCTAssertEqual(UnityGame.mode(fromQuery: output), 1)
     }
 
+    func testTheRegistryFileRemovesAndSetsInOneImport() {
+        let game = UnityGame(company: "Sports Interactive", product: "Football Manager 27")
+        let file = game.registryFile(deleting: [UnityGame.widthValue, "Odd \"name\""],
+                                     setting: [UnityGame.useNativeValue: 1])
+        XCTAssertEqual(file, [
+            "Windows Registry Editor Version 5.00",
+            "",
+            "[HKEY_CURRENT_USER\\Software\\Sports Interactive\\Football Manager 27]",
+            "\"Screenmanager Resolution Width_h182942802\"=-",
+            "\"Odd \\\"name\\\"\"=-",
+            "\"Screenmanager Resolution Use Native_h1405027254\"=dword:00000001",
+        ].joined(separator: "\r\n") + "\r\n")
+    }
+
     func testTheResetTakesOnlyTheScreenSettings() {
         XCTAssertEqual(UnityGame.displayValues(fromQuery: query(width: 1, height: 1)), [
             "Screenmanager Fullscreen mode_h3630240806",

@@ -543,6 +543,18 @@ struct UnityGame: Equatable {
         valueNames(fromQuery: output).filter { $0.hasPrefix("Screenmanager ") || $0.hasPrefix("UnitySelectMonitor") }
     }
 
+    /// A .reg file that removes `deleting` and sets the DWORD values of `setting` under the
+    /// game's key. One `reg import` does all of it: each Wine start costs seconds under FEX.
+    func registryFile(deleting: [String], setting: [String: Int] = [:]) -> String {
+        func quoted(_ name: String) -> String {
+            "\"" + name.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+        }
+        var lines = ["Windows Registry Editor Version 5.00", "", "[HKEY_CURRENT_USER\\Software\\\(company)\\\(product)]"]
+        lines += deleting.map { "\(quoted($0))=-" }
+        lines += setting.sorted { $0.key < $1.key }.map { "\(quoted($0.key))=dword:" + String(format: "%08x", $0.value) }
+        return lines.joined(separator: "\r\n") + "\r\n"
+    }
+
     /// True when the saved size is broken: smaller than the minimum in one direction.
     static func hasBrokenSize(query output: String) -> Bool {
         let width = dword(widthValue, fromQuery: output), height = dword(heightValue, fromQuery: output)
@@ -562,14 +574,21 @@ extension GameRuntime {
         guard let query = try? await XodusCLI.runProcess(wine64, ["reg", "query", game.registryKey],
                                                          environment: environment(), timeout: 60),
               query.status == 0, UnityGame.hasBrokenSize(query: String(decoding: query.stdout, as: UTF8.self)) else { return false }
-        for name in [UnityGame.widthValue, UnityGame.heightValue] {
-            _ = try? await XodusCLI.runProcess(wine64, ["reg", "delete", game.registryKey, "/v", name, "/f"],
-                                               environment: environment(), timeout: 60)
-        }
-        _ = try? await XodusCLI.runProcess(wine64, ["reg", "add", game.registryKey, "/v", UnityGame.useNativeValue,
-                                                    "/t", "REG_DWORD", "/d", "1", "/f"],
-                                           environment: environment(), timeout: 60)
-        return true
+        let file = game.registryFile(deleting: [UnityGame.widthValue, UnityGame.heightValue],
+                                     setting: [UnityGame.useNativeValue: 1])
+        return (try? await importRegistry(file)) != nil
+    }
+
+    /// Imports the text of a .reg file into the prefix with one Wine start. The file is
+    /// UTF-16 with a byte order mark, as regedit writes it, so any key name works.
+    func importRegistry(_ text: String) async throws {
+        let name = ".iodus-import-\(UUID().uuidString).reg"
+        let file = prefix.appendingPathComponent("drive_c", isDirectory: true).appendingPathComponent(name)
+        var data = Data([0xFF, 0xFE])
+        data.append(text.data(using: .utf16LittleEndian) ?? Data())
+        try data.write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        try await wine(["reg", "import", "C:\\" + name])
     }
 
     /// Removes the screen settings that a Unity game saved (size, window mode, monitor).
@@ -578,9 +597,8 @@ extension GameRuntime {
         let query = try await XodusCLI.runProcess(wine64, ["reg", "query", game.registryKey], environment: environment(), timeout: 60)
         guard query.status == 0 else { return 0 }   // The game saved nothing yet.
         let names = UnityGame.displayValues(fromQuery: String(decoding: query.stdout, as: UTF8.self))
-        for name in names {
-            try await wine(["reg", "delete", game.registryKey, "/v", name, "/f"])
-        }
+        guard !names.isEmpty else { return 0 }
+        try await importRegistry(game.registryFile(deleting: names))
         _ = try? await XodusCLI.runProcess(wineserver, ["-w"], environment: environment(), timeout: 60)
         return names.count
     }
