@@ -435,6 +435,19 @@ enum RuntimeInstaller {
             try fm.createSymbolicLink(atPath: to.path, withDestinationPath: link)
             unix.append(name)
         }
+        // D3DMetal 3: DLSS goes to MetalFX through nvngx.dll. Apple's read-me says to use
+        // nvngx-on-metalfx under the name nvngx (as the Game Porting Toolkit build did).
+        if shim == nil, windows.contains("nvngx-on-metalfx.dll"), !windows.contains("nvngx.dll") {
+            let to = pe.appendingPathComponent("nvngx.dll")
+            try? fm.removeItem(at: to)
+            try fm.copyItem(at: pe.appendingPathComponent("nvngx-on-metalfx.dll"), to: to)
+            windows.append("nvngx.dll")
+            let link = so.appendingPathComponent("nvngx.so")
+            try? fm.removeItem(at: link)
+            try fm.createSymbolicLink(atPath: link.path, withDestinationPath: "../../external/libd3dshared.dylib")
+            unix.append("nvngx.so")
+        }
+
         // The layer in front of Apple's d3d12.dll, and the .so link for the renamed file.
         if let shim {
             let layer = pe.appendingPathComponent("d3d12.dll")

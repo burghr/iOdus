@@ -125,7 +125,13 @@ final class D3DMetal4RuntimeTests: XCTestCase {
         XCTAssertNil(manifest.environment?["WINE_BUILTIN_BY_FILE_NAME"])
         XCTAssertNil(manifest.environment?["D3DM_MTL4"])
         XCTAssertTrue(manifest.d3dmetal?.windows.contains("atidxx64.dll") ?? false, "Apple's file list")
-        XCTAssertFalse(manifest.d3dmetal?.windows.contains("nvngx.dll") ?? true, "Not Apple's file")
+        XCTAssertFalse(manifest.d3dmetal?.windows.contains("atiadlxx.dll") ?? true, "Not Apple's file")
+        XCTAssertEqual(try Data(contentsOf: pe.appendingPathComponent("nvngx.dll")),
+                       try Data(contentsOf: pe.appendingPathComponent("nvngx-on-metalfx.dll")),
+                       "DLSS to MetalFX, as Apple's read-me says")
+        XCTAssertTrue(manifest.d3dmetal?.unix.contains("nvngx.so") ?? false)
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(
+            atPath: root.appendingPathComponent("lib/wine/x86_64-unix/nvngx.so").path), "../../external/libd3dshared.dylib")
     }
 
     func testAPackageWithoutApplesSignatureIsRefused() throws {
