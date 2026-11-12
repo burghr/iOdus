@@ -89,6 +89,11 @@ final class GameLauncher {
         }
         stopRequested = false
         do {
+            // Native arm64 runtimes: the app's signed loader and its Xbox DLLs, before
+            // any Wine program runs. A new download has no loader link yet, and an
+            // existing prefix skips the setup but can need Wine's prefix update.
+            try runtime.linkSignedLoader()
+            _ = try? runtime.updateOverlay()
             if !runtime.isPrepared {
                 state = .preparing(id: id, step: "Preparing the game runtime")
                 try await runtime.prepare { step in
@@ -110,9 +115,6 @@ final class GameLauncher {
             // The d3d12.dll layer of this app version (D3DMetal 4 runtimes only).
             // If the copy fails, the game starts with the layer that the runtime has.
             _ = try? runtime.updateD3D12Layer()
-            // Native arm64 runtimes: the app's signed loader and its Xbox DLLs.
-            try runtime.linkSignedLoader()
-            _ = try? runtime.updateOverlay()
             // The game's Retina choice. A change restarts the Wine processes of the prefix.
             try await runtime.applyRetinaMode(options.retina)
             // Some games check the Gaming Services version in the registry.
