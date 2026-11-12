@@ -72,6 +72,8 @@ struct GameSettingsView: View {
         .padding(.horizontal, 22 * s)
         .padding(.vertical, 10 * s)
         .background(Theme.tile.opacity(0.9))
+        // A row whose work runs now is dimmed; its action does nothing until the work is done.
+        .opacity(row == .resetDisplay && model.resettingDisplay == game.id ? 0.5 : 1)
     }
 
     private func content(_ row: GameSettingsRow, _ options: GameOptions) -> (String, String, [String], String?) {
@@ -120,7 +122,8 @@ struct GameSettingsView: View {
             }
             return ("arrow.counterclockwise", "Reset display settings",
                     ["Removes the screen size, window mode, and monitor that the game saved.",
-                     "Use it when the game opens with a wrong size or flashes."], "Reset")
+                     "Use it when the game opens with a wrong size or flashes."],
+                    model.resettingDisplay == game.id ? "Resetting…" : "Reset")
         case .showInFinder:
             let path = model.downloads.installs[game.id]?.path ?? ""
             return ("folder", "Show in Finder",

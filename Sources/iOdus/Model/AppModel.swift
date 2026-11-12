@@ -106,6 +106,7 @@ final class AppModel: ObservableObject {
     @Published var uploadingSaves: String?
     /// True while Microsoft's Visual C++ runtime installs in the prefix.
     @Published var installingVCRuntime = false
+    @Published var resettingDisplay: Game.ID?   // The game whose display settings iOdus resets now
     /// The installed runtimes (GPTK first) and the choices of the player.
     @Published var runtimes: [GameRuntime] = RuntimeCatalog.discover()
     var runtimeChoice = RuntimeChoice(defaults: .standard)
@@ -1514,12 +1515,17 @@ final class AppModel: ObservableObject {
             showToast("Stop \(game.title) first.")
             return
         }
+        // One reset at a time: a second press waits for the first one.
+        guard resettingDisplay == nil else { return }
         let runtime = runtime(for: game)
         guard FileManager.default.fileExists(atPath: runtime.prefix.path), runtime.problem == nil else {
             showToast("\(game.title) saved no display settings on \(runtime.name) yet.", seconds: 5)
             return
         }
+        resettingDisplay = game.id
+        showToast("Resetting the display settings of \(game.title)…", seconds: 60)
         Task {
+            defer { resettingDisplay = nil }
             do {
                 try runtime.linkSignedLoader()
                 let count = try await runtime.resetUnityDisplay(unity)
