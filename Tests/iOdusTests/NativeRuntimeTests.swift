@@ -133,6 +133,101 @@ final class NativeRuntimeTests: XCTestCase {
         XCTAssertFalse(native.installsVCRuntime, "Wine's own C++ runtime on the native runtimes")
     }
 
+    /// Writes files (path -> contents; "+x" at the end makes it executable) and packs them as a .tar.gz.
+    private func archive(_ name: String, _ files: [String: String], in work: URL) throws -> URL {
+        let fm = FileManager.default
+        let dir = work.appendingPathComponent("src-\(name)")
+        for (path, contents) in files {
+            let executable = path.hasSuffix("+x")
+            let file = dir.appendingPathComponent(executable ? String(path.dropLast(2)) : path)
+            try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(contents.utf8).write(to: file)
+            if executable { try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path) }
+        }
+        let out = work.appendingPathComponent("\(name).tar.gz")
+        try RuntimeSetup.run("/usr/bin/tar", ["-czf", out.path, "-C", dir.path, "."])
+        return out
+    }
+
+    func testTheFEXInstallerMakesTheRuntimeFolder() throws {
+        let work = try tempFolder()
+        let engine = try archive("engine", [
+            "engine/bin/wine": "ADHOC LOADER", "engine/bin/wineserver+x": "#!/bin/sh\n",
+            "engine/lib/wine/aarch64-unix/wine": "ADHOC LOADER", "engine/lib/wine/aarch64-unix/ntdll.so": "NTDLL",
+            "engine/lib/libMoltenVK.dylib": "ENGINE MOLTENVK", "engine/share/wine/wine.inf": "INF",
+            "frameworks/GStreamer.framework/Versions/1.0/lib/x": "GST"], in: work)
+        let renderers = try archive("renderers", [
+            "renderers/vkd3d/wine/aarch64-windows/d3d12.dll": "VKD3D", "renderers/dxvk/wine/aarch64-windows/d3d11.dll": "DXVK",
+            "licenses/vkd3d-proton-COPYING": "LGPL", "BUILD.txt": "build"], in: work)
+        let kk = try archive("kk", [
+            "lib/libMoltenVK.dylib": "KHRONOS LOADER", "renderers/kosmickrisp/kosmickrisp_icd.json": "{}",
+            "renderers/kosmickrisp/libvulkan_kosmickrisp.dylib": "KK", "licenses/Mesa-license.rst": "MIT"], in: work)
+        let runtimes = work.appendingPathComponent("Runtimes")
+        let download = RuntimeDownload.highballArm64
+        try RuntimeInstaller.installFEX(engine: engine, renderers: renderers, kosmickrisp: kk, download: download, runtimes: runtimes)
+
+        let root = runtimes.appendingPathComponent(download.id)
+        let fm = FileManager.default
+        XCTAssertEqual(try fm.destinationOfSymbolicLink(atPath: root.appendingPathComponent("engine/bin/wine").path),
+                       "../lib/wine/aarch64-unix/wine")
+        XCTAssertFalse(fm.fileExists(atPath: root.appendingPathComponent("engine/lib/wine/aarch64-unix/wine").path),
+                       "The engine's ad-hoc loader goes")
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("engine/lib/libMoltenVK.dylib"), encoding: .utf8),
+                       "KHRONOS LOADER")
+        XCTAssertTrue(fm.fileExists(atPath: root.appendingPathComponent("renderers/vkd3d/wine/aarch64-windows/d3d12.dll").path))
+        XCTAssertTrue(fm.fileExists(atPath: root.appendingPathComponent("renderers/kosmickrisp/kosmickrisp_icd.json").path))
+        XCTAssertTrue(fm.fileExists(atPath: root.appendingPathComponent("LICENSES/kosmickrisp/Mesa-license.rst").path))
+        let manifest = try JSONDecoder().decode(RuntimeManifest.self, from: Data(contentsOf: root.appendingPathComponent("runtime.json")))
+        XCTAssertEqual(manifest, RuntimeInstaller.fexManifest(id: download.id, name: download.name, release: download.release))
+        let runtime = try XCTUnwrap(RuntimeCatalog.discover(folder: runtimes, prefixes: work.appendingPathComponent("Prefixes"))
+            .first { $0.id == download.id })
+        XCTAssertEqual(runtime.family, .fex)
+        XCTAssertEqual(runtime.wineInf.resolvingSymlinksInPath().path,
+                       root.appendingPathComponent("engine/share/wine/wine.inf").resolvingSymlinksInPath().path)
+
+        // An update replaces the folder; the prefix stays.
+        let prefix = work.appendingPathComponent("Prefixes/\(download.id)")
+        try fm.createDirectory(at: prefix, withIntermediateDirectories: true)
+        try RuntimeInstaller.installFEX(engine: engine, renderers: renderers, kosmickrisp: kk, download: download, runtimes: runtimes)
+        XCTAssertTrue(fm.fileExists(atPath: prefix.path))
+        XCTAssertNil(try? fm.contentsOfDirectory(atPath: runtimes.path).first { $0.hasPrefix(".install") })
+    }
+
+    func testTheFEXInstallerWithTheRealArchives() throws {
+        // The release files of Highball's arm64 engine, if this Mac has a copy.
+        let folder = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("projects/iodus-runtimes/fex/download")
+        let engine = folder.appendingPathComponent("engine-arm64-wine-11.18-20261108T132317Z-spatial-0056-0057.tar.gz")
+        let renderers = folder.appendingPathComponent("renderers-arm64-20261031T230303Z-manual.tar.gz")
+        let kk = folder.appendingPathComponent("kosmickrisp-arm64-20261104T165852Z-push.tar.gz")
+        try XCTSkipUnless([engine, renderers, kk].allSatisfy { FileManager.default.fileExists(atPath: $0.path) },
+                          "No Highball arm64 release files on this Mac")
+        let package = try XCTUnwrap(RuntimeDownload.highballArm64.fex)
+        for (archive, file) in zip(package.archives, [engine, renderers, kk]) {
+            XCTAssertNoThrow(try RuntimeSetup.verify(file, sha256: archive.sha256), file.lastPathComponent)
+        }
+        let work = try tempFolder()
+        let runtimes = work.appendingPathComponent("Runtimes")
+        try RuntimeInstaller.installFEX(engine: engine, renderers: renderers, kosmickrisp: kk,
+                                        download: RuntimeDownload.highballArm64, runtimes: runtimes)
+        let root = runtimes.appendingPathComponent(RuntimeDownload.highballArm64.id)
+        for path in ["engine/bin/wineserver", "engine/lib/wine/aarch64-unix/ntdll.so", "engine/lib/wine/aarch64-windows/xtajit64.dll",
+                     "renderers/vkd3d/wine/aarch64-windows/d3d12.dll", "renderers/kosmickrisp/kosmickrisp_icd.json",
+                     "frameworks/GStreamer.framework"] {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(path).path), path)
+        }
+    }
+
+    func testTheFEXDownloadsAreNativeBetaRuntimes() {
+        for download in [RuntimeDownload.highballArm64, RuntimeDownload.highballArm64Alpha] {
+            XCTAssertEqual(download.family, .fex)
+            XCTAssertTrue(download.isBeta)
+            XCTAssertEqual(download.minimumMacOS, 27)
+            XCTAssertEqual(download.fex?.archives.count, 3)
+            XCTAssertEqual(download.url, download.fex?.engine.url)
+        }
+        XCTAssertEqual(RuntimeDownload.crossover.family, .d3dmetal)
+    }
+
     func testEnvironmentCanRemoveAVariable() throws {
         let (runtime, _) = try makeRuntime()
         let env = runtime.environment(extra: ["WINEDLLPATH_PREPEND": "/x"], removing: ["WINEDLLPATH_PREPEND"])

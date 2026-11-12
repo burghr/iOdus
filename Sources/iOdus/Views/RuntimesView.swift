@@ -143,6 +143,9 @@ struct RuntimeRowView: View {
                 return "Downloading \(Bytes.text(state.done)) of \(Bytes.text(state.total)) · \(percent)%"
             }
             let what = release.map { "Release \(d.release) (installed: \($0))" } ?? "Not installed"
+            if let fex = d.fex {
+                return "\(what) · \(Bytes.text(fex.archives.reduce(0) { $0 + $1.size })) download · native Apple silicon, beta"
+            }
             return "\(what) · \(Bytes.text(d.size)) download · uses D3DMetal from your Game Porting Toolkit"
         }
     }

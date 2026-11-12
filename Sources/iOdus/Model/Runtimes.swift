@@ -79,7 +79,7 @@ enum RuntimeRow: Equatable {
         switch self {
         case .useDefault: return nil
         case .installed(let runtime): return runtime.family
-        case .available: return .d3dmetal   // The downloads are D3DMetal runtimes.
+        case .available(let download): return download.family
         }
     }
 }
@@ -346,15 +346,52 @@ extension AppModel {
         FileManager.default.fileExists(atPath: RuntimeInstaller.gptkWine.appendingPathComponent("lib/external/D3DMetal.framework").path)
     }
 
+    /// A native arm64 runtime: three archives, one progress, then the install.
+    private func fetchFEXRuntime(_ download: RuntimeDownload, package: FEXPackage,
+                                 progress: @escaping @MainActor (Int64, Int64) -> Void,
+                                 installing: @escaping @MainActor () -> Void) async throws {
+        let temp = FileManager.default.temporaryDirectory
+        let files = package.archives.enumerated().map { i, archive in
+            temp.appendingPathComponent("iodus-\(download.id)-\(download.release)-\(i).tar.gz")
+        }
+        defer { for file in files { try? FileManager.default.removeItem(at: file) } }
+        let total = package.archives.reduce(0) { $0 + $1.size }
+        var before: Int64 = 0
+        for (archive, file) in zip(package.archives, files) {
+            try Task.checkCancellation()
+            let offset = before
+            try await RuntimeSetup.download(url: archive.url, size: archive.size, to: file) { done, _ in
+                Task { @MainActor in progress(offset + done, total) }
+            }
+            before += archive.size
+        }
+        try Task.checkCancellation()
+        installing()
+        let runtimesFolder = RuntimeCatalog.runtimesFolder
+        try await Task.detached {
+            for (archive, file) in zip(package.archives, files) {
+                try RuntimeSetup.verify(file, sha256: archive.sha256)
+            }
+            try RuntimeInstaller.installFEX(engine: files[0], renderers: files[1], kosmickrisp: files[2],
+                                            download: download, runtimes: runtimesFolder)
+        }.value
+        reloadRuntimes()
+    }
+
     /// Downloads, checks, and installs a runtime, then reloads the list.
     /// Settings and the setup use it. The archive is removed in all cases.
     func fetchRuntime(_ download: RuntimeDownload,
                       progress: @escaping @MainActor (Int64, Int64) -> Void,
                       installing: @escaping @MainActor () -> Void) async throws {
-        // A beta runtime brings its own D3DMetal; the others copy it from GPTK.
-        if download.d3dmetal == nil { guard gptkHasD3DMetal else { throw RuntimeInstallError.noGPTK } }
+        // A beta runtime brings its own D3DMetal; the others copy it from GPTK. A native
+        // arm64 (FEX) runtime has no D3DMetal.
+        if download.d3dmetal == nil, download.fex == nil { guard gptkHasD3DMetal else { throw RuntimeInstallError.noGPTK } }
         if let free = Bytes.freeSpace(at: GameRuntime.support), free < download.neededBytes {
             throw RuntimeSetupError.notEnoughSpace(needed: download.neededBytes, free: free)
+        }
+        if let fex = download.fex {
+            try await fetchFEXRuntime(download, package: fex, progress: progress, installing: installing)
+            return
         }
         let shim = GameRuntime.standard.componentFolder.appendingPathComponent("compat/highball-d3d12-shim.dll")
         if download.d3dmetal != nil, !FileManager.default.fileExists(atPath: shim.path) {
