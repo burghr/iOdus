@@ -89,7 +89,7 @@ final class SettingsMenuTests: XCTestCase {
     }
 
     func testTheUpdatesCategoryHasTheReleaseNotesRow() {
-        XCTAssertEqual(SettingsCategory.updates.rows, [.appUpdate, .releaseNotes, .updates])
+        XCTAssertEqual(SettingsCategory.updates.rows, [.appUpdate, .releaseNotes, .updates, .prereleases])
         let model = model()
         XCTAssertTrue(model.releasePageURL.hasPrefix("https://github.com/burghr/iOdus/releases"))
     }

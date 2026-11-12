@@ -331,7 +331,7 @@ struct RootContent: View {
                 default: return [.init(.b, "Back")]
                 }
             case .releaseNotes: return [.init(.a, "Open"), .init(.b, "Back")]
-            case .fullScreen, .updates:
+            case .fullScreen, .updates, .prereleases:
                 return [.init(.a, "Switch"), .init(.b, "Back")]
             case .performance:
                 return [.init(.a, "Change"), .init(.b, "Back")]

@@ -1069,6 +1069,11 @@ final class AppModel: ObservableObject {
                 updateChecker.enabled.toggle()
                 objectWillChange.send()
                 if updateChecker.enabled { Task { await checkForUpdates(force: true) } }
+            case .prereleases:
+                updateChecker.prereleases.toggle()
+                objectWillChange.send()
+                // A new check finds a pre-release now, or forgets it when the switch is off.
+                checkForUpdatesNow()
             case .exportLogs: exportLogs()
             default: break
             }
@@ -1640,7 +1645,7 @@ enum DetailAction: Int, CaseIterable {
 }
 
 enum SettingsRow: Int, CaseIterable {
-    case account, installFolder, rescan, fullScreen, performance, appUpdate, releaseNotes, updates, runtime, vcRuntime,
+    case account, installFolder, rescan, fullScreen, performance, appUpdate, releaseNotes, updates, prereleases, runtime, vcRuntime,
          backend, exportLogs, about
 }
 
@@ -1696,7 +1701,7 @@ enum SettingsCategory: Int, CaseIterable {
         case .games: [.installFolder, .rescan]
         case .display: [.fullScreen, .performance]
         case .runtimes: [.runtime, .vcRuntime]
-        case .updates: [.appUpdate, .releaseNotes, .updates]
+        case .updates: [.appUpdate, .releaseNotes, .updates, .prereleases]
         case .about: [.about, .backend, .exportLogs]
         }
     }

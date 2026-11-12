@@ -18,6 +18,10 @@ final class UpdateVersionTests: XCTestCase {
         ]
         XCTAssertEqual(UpdateCheck.newest(releases)?.tagName, "v0.10.0")
         XCTAssertNil(UpdateCheck.newest([releases[1], releases[2]]))
+        XCTAssertEqual(UpdateCheck.newest([releases[0], releases[1], releases[2]], prereleases: true)?.tagName, "v0.3.0",
+                       "With the switch on, a pre-release counts, a draft does not")
+        XCTAssertEqual(UpdateCheck.newest(releases, prereleases: true)?.tagName, "v0.10.0",
+                       "A newer full release still wins")
     }
 }
 
@@ -49,6 +53,26 @@ final class UpdateCheckerTests: XCTestCase {
         var fetch: UpdateChecker.Fetch {
             { url in self.calls += 1; self.lastURL = url; return (self.body, self.status) }
         }
+    }
+
+    func testPreReleasesNeedTheSwitch() async throws {
+        let github = FakeGitHub(status: 200, body: releasesJSON)
+        let store = defaults()
+        let checker = UpdateChecker(repository: "burghr/iOdus", currentVersion: "0.3.0", defaults: store, fetch: github.fetch)
+        XCTAssertFalse(checker.prereleases, "Off by default")
+        let none = await checker.check(force: true)
+        XCTAssertNil(none)
+        XCTAssertNil(checker.available, "0.4.0 is a pre-release")
+
+        checker.prereleases = true
+        let found = await checker.check(force: true)
+        let item = try XCTUnwrap(found)
+        XCTAssertEqual(checker.available?.version, "0.4.0")
+        XCTAssertEqual(item.title, "iOdus 0.4.0 (pre-release) is available")
+
+        checker.prereleases = false
+        _ = await checker.check(force: true)
+        XCTAssertNil(checker.available, "Off again: the pre-release is not offered")
     }
 
     func testNewVersionGivesOneNotification() async throws {

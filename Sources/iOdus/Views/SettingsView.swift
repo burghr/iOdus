@@ -85,6 +85,8 @@ struct SettingsView: View {
                 SwitchView(on: AppSettings.startFullScreen, scale: s)
             } else if row == .updates {
                 SwitchView(on: model.updateChecker.enabled, scale: s)
+            } else if row == .prereleases {
+                SwitchView(on: model.updateChecker.prereleases, scale: s)
             } else if let action {
                 Text(action)
                     .font(.system(size: 18 * s, weight: .medium))
@@ -156,6 +158,9 @@ struct SettingsView: View {
             return ("safari", "Release notes on GitHub", [detail], "Open")
         case .updates:
             return ("clock.arrow.circlepath", "Check for updates automatically", ["Once a day."], nil)
+        case .prereleases:
+            return ("flask", "Install pre-releases",
+                    ["Get test versions before the full release. A pre-release can have more problems."], nil)
         case .runtime:
             // A opens the runtimes page: the installed runtimes, downloads, and updates.
             var lines = model.runtimeStatus

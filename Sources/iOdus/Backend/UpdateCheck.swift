@@ -93,9 +93,9 @@ enum UpdateCheck {
         return .orderedSame
     }
 
-    /// The newest release that is not a draft and not a pre-release.
-    static func newest(_ releases: [ReleaseInfo]) -> ReleaseInfo? {
-        releases.filter { !$0.draft && !$0.prerelease }
+    /// The newest release that is not a draft. A pre-release counts only with `prereleases`.
+    static func newest(_ releases: [ReleaseInfo], prereleases: Bool = false) -> ReleaseInfo? {
+        releases.filter { !$0.draft && (prereleases || !$0.prerelease) }
             .max { compare($0.version, $1.version) == .orderedAscending }
     }
 }
@@ -111,6 +111,7 @@ final class UpdateChecker {
     static let enabledKey = "checkForUpdates"
     static let lastCheckKey = "updateLastCheck"
     static let announcedKey = "updateAnnouncedVersion"
+    static let prereleasesKey = "updatePrereleases"
     static let interval: TimeInterval = 24 * 60 * 60
 
     let repository: String
@@ -137,6 +138,12 @@ final class UpdateChecker {
         set { defaults.set(newValue, forKey: Self.enabledKey) }
     }
 
+    /// Pre-releases count as updates. Off by default.
+    var prereleases: Bool {
+        get { defaults.bool(forKey: Self.prereleasesKey) }
+        set { defaults.set(newValue, forKey: Self.prereleasesKey) }
+    }
+
     var isDue: Bool {
         guard let last = defaults.object(forKey: Self.lastCheckKey) as? Date else { return true }
         return now().timeIntervalSince(last) >= Self.interval
@@ -152,7 +159,7 @@ final class UpdateChecker {
         defaults.set(now(), forKey: Self.lastCheckKey)
         guard let (data, status) = try? await fetch(url), status == 200,
               let releases = try? JSONDecoder().decode([ReleaseInfo].self, from: data) else { return nil }
-        guard let newest = UpdateCheck.newest(releases),
+        guard let newest = UpdateCheck.newest(releases, prereleases: prereleases),
               UpdateCheck.compare(newest.version, current) == .orderedDescending else {
             available = nil
             return nil
@@ -161,7 +168,8 @@ final class UpdateChecker {
         if let announced = defaults.string(forKey: Self.announcedKey),
            UpdateCheck.compare(newest.version, announced) != .orderedDescending { return nil }
         defaults.set(newest.version, forKey: Self.announcedKey)
-        return AppNotification(date: now(), kind: .update, title: "iOdus \(newest.version) is available",
+        let name = newest.prerelease ? "iOdus \(newest.version) (pre-release)" : "iOdus \(newest.version)"
+        return AppNotification(date: now(), kind: .update, title: "\(name) is available",
                                detail: "You have version \(current). Select to install it.",
                                action: .openUpdate)
     }

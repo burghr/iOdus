@@ -152,6 +152,11 @@ enum Snapshot {
             model.settingsCategory = SettingsCategory.display.rawValue
             model.settingsFocus = .rows
             model.settingsIndex = 0
+        case "settings-updates":
+            model.stack = [.home, .settings]
+            model.settingsCategory = SettingsCategory.updates.rawValue
+            model.settingsFocus = .rows
+            model.settingsIndex = 3
         case "friends": model.stack = [.home, .friends]
         case "friendcard":
             model.stack = [.home, .friends]
