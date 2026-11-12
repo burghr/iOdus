@@ -326,8 +326,8 @@ demo mode never reads the real runtime folders.
 
 ## Project rules
 
-See [`CLAUDE.md`](CLAUDE.md). The most important rule: **Xbox Live gets real data
-only.** Code and tests never send made-up or test data (events, achievements,
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). The most important rule: **Xbox Live
+gets real data only.** Code and tests never send made-up or test data (events, achievements,
 presence, saves, messages, friend or Store actions) to Xbox Live or other
 Microsoft services. Reads are allowed. Tests of code that writes use a fake
 server or injected answers.

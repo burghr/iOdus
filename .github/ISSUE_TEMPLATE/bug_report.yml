@@ -1,0 +1,136 @@
+name: Bug report
+description: Report a problem with iOdus or with a game in iOdus.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the report. Before you continue, search the
+        [issues](https://github.com/burghr/iOdus/issues?q=is%3Aissue) and read the
+        [known limits](https://github.com/burghr/iOdus#known-limits).
+
+        Do not put tokens, email addresses, gamertags, or XUIDs in this report.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened
+      description: Tell what you did, what you expected, and what happened. Copy the exact error text.
+      placeholder: |
+        I pressed Play on STEEP. The game did not start.
+        iOdus showed: "STEEP stopped (code 101)."
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the game page of STEEP.
+        2. Press Play.
+        3. ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Game start (Play)
+        - Install or download
+        - Sign-in or setup
+        - Cloud saves
+        - Achievements
+        - Friends or messages
+        - Store
+        - Cloud streaming
+        - Controller
+        - Updates
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: game
+    attributes:
+      label: Game
+      description: The name of the game, if the problem is about a game. Write "all games" if the problem occurs with each game.
+      placeholder: STEEP
+
+  - type: dropdown
+    id: source
+    attributes:
+      label: How do you have the game
+      options:
+        - Owned (bought on the Microsoft Store or Xbox)
+        - PC Game Pass
+        - Not about a game
+
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: Game runtime
+      description: The runtime on the game page, or the default runtime in Settings.
+      options:
+        - Game Porting Toolkit 3.0 (Wine 7.7)
+        - CrossOver 26.3 Wine (Wine 11)
+        - CrossOver 26.3 Wine + D3DMetal 4 (beta)
+        - I do not know
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: iodus-version
+    attributes:
+      label: iOdus version
+      description: Settings shows the version, for example "iOdus 0.1.9".
+      placeholder: "0.1.9"
+    validations:
+      required: true
+
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      description: Apple menu > About This Mac.
+      placeholder: "15.5"
+    validations:
+      required: true
+
+  - type: input
+    id: mac
+    attributes:
+      label: Mac model
+      placeholder: MacBook Air (M2, 2022)
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        In iOdus, open Settings and select Export logs. iOdus writes a zip file to the Desktop.
+        The export removes tokens, email addresses, XUIDs, your account name, and your home folder.
+        Drag the zip file into this box.
+    validations:
+      required: true
+
+  - type: textarea
+    id: more
+    attributes:
+      label: Other information
+      description: Screenshots, changes that you tried, or the result with a different runtime.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched the issues, and I did not find a report of the same problem.
+          required: true
+        - label: My Microsoft account owns this game, or PC Game Pass gives me the game.
+          required: true

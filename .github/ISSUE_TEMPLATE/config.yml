@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Known limits
+    url: https://github.com/burghr/iOdus#known-limits
+    about: Read the known limits before you report a problem. Some games do not start yet.
+  - name: Contribution guide
+    url: https://github.com/burghr/iOdus/blob/master/CONTRIBUTING.md
+    about: How to report a problem and how to send a pull request.
