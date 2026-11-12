@@ -228,6 +228,18 @@ final class NativeRuntimeTests: XCTestCase {
         XCTAssertEqual(RuntimeDownload.crossover.family, .d3dmetal)
     }
 
+    @MainActor
+    func testAGamePageOffersTheDownloadsOfTheChosenTechnology() throws {
+        let model = AppModel()
+        model.runtimes = []
+        model.runtimeDownloadCatalog = [RuntimeDownload.crossover, RuntimeDownload.highballArm64, RuntimeDownload.highballArm64Alpha]
+        model.runtimeFamily = .fex
+        let rows = model.runtimeRows(for: "9N4NKMXDZCX6")
+        XCTAssertEqual(rows, [.useDefault, .available(RuntimeDownload.highballArm64), .available(RuntimeDownload.highballArm64Alpha)])
+        model.runtimeFamily = .d3dmetal
+        XCTAssertEqual(model.runtimeRows(for: "9N4NKMXDZCX6"), [.useDefault, .available(RuntimeDownload.crossover)])
+    }
+
     func testEnvironmentCanRemoveAVariable() throws {
         let (runtime, _) = try makeRuntime()
         let env = runtime.environment(extra: ["WINEDLLPATH_PREPEND": "/x"], removing: ["WINEDLLPATH_PREPEND"])

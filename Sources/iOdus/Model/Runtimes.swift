@@ -178,9 +178,10 @@ extension AppModel {
 
     /// The rows of one technology (the box under the technology choice).
     func runtimeRows(for gameID: Game.ID?, family: RuntimeFamily) -> [RuntimeRow] {
-        let rows: [RuntimeRow] = gameID == nil
-            ? runtimes.map { .installed($0) } + availableDownloads.map { .available($0) }
-            : runtimes.map { .installed($0) }
+        // Downloads show on the Settings page and on a game page: not installed, or a newer release.
+        let rows: [RuntimeRow] = runtimes.map { .installed($0) }
+            + availableDownloads.filter { download in gameID == nil || !runtimes.contains { $0.id == download.id } }
+                .map { .available($0) }
         let mine = rows.filter { $0.family == family }
         return gameID == nil ? mine : [.useDefault] + mine
     }
@@ -321,11 +322,16 @@ extension AppModel {
             showToast("Stop the game first.")
             return
         }
-        guard gptkHasD3DMetal else {
+        // Only a runtime that copies D3DMetal from the Game Porting Toolkit needs it
+        // (the same rule as fetchRuntime): not the D3DMetal 4 beta, not a FEX runtime.
+        if download.d3dmetal == nil, download.fex == nil, !gptkHasD3DMetal {
             showToast(RuntimeInstallError.noGPTK.errorDescription ?? "", seconds: 8)
             return
         }
-        runtimeDownload = RuntimeDownloadState(id: download.id, total: download.size)
+        // A download from a game page: the game uses the new runtime when it is installed.
+        var gameID: Game.ID?
+        if case .runtimes(let id) = screen { gameID = id }
+        runtimeDownload = RuntimeDownloadState(id: download.id, total: download.neededBytes - download.unpackedBytes)
         Task {
             do {
                 try await fetchRuntime(download, progress: { done, total in
@@ -333,7 +339,11 @@ extension AppModel {
                     self.runtimeDownload?.done = done
                     if total > 0 { self.runtimeDownload?.total = total }
                 }, installing: { self.runtimeDownload?.installing = true })
-                showToast("\(download.displayName) is installed. Choose it as the default or on a game page.", seconds: 6)
+                if let gameID, let game = game(gameID), let runtime = runtimes.first(where: { $0.id == download.id }) {
+                    useRuntime(runtime, for: game)
+                } else {
+                    showToast("\(download.displayName) is installed. Choose it as the default or on a game page.", seconds: 6)
+                }
             } catch {
                 showToast(error.localizedDescription, seconds: 8)
             }
