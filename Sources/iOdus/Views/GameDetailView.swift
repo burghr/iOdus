@@ -23,6 +23,10 @@ struct GameDetailView: View {
                         Text("Last played \(Self.relative(played))")
                             .foregroundStyle(Theme.textSecondary)
                     }
+                    if game.installState == .installed, let lease = model.offlineLease(for: game) {
+                        Label(lease.text, systemImage: "wifi.slash")
+                            .foregroundStyle(Theme.textSecondary)
+                    }
                     if let score = game.gamerscore {
                         HStack(spacing: 6 * s) {
                             GamerscoreMark(size: 18 * s)

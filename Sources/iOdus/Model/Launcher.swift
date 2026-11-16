@@ -29,6 +29,11 @@ enum PlayState: Equatable {
 final class GameLauncher {
     var cli: XodusCLI?
     var market = "US"
+    /// The folder for the offline licenses (`xodus-cli run --license-cache`).
+    var licenseFolder = OfflineLicenses.folder
+    /// Names the account for the offline identity of the Xbox runtime
+    /// (XODUS_ACCOUNT_HASH): lower-case hex, never the account name.
+    var accountKey: String?
     /// The runtime of the running (or last) game.
     private(set) var runtime: GameRuntime
     private(set) var state: PlayState = .idle {
@@ -41,6 +46,7 @@ final class GameLauncher {
     var onFinish: ((String, String?) -> Void)?
 
     private var service: StreamingProcess?
+    private var serviceStartedOffline = false
     private var bridge: XodusBridge?
     private var game: Process?
     private var gameImage: String?      // The file name of the game executable, for taskkill
@@ -74,7 +80,8 @@ final class GameLauncher {
     }
 
     func play(id: String, title: String, folder: URL, saveSync: SaveSync? = nil, using chosen: GameRuntime? = nil,
-              options: GameOptions = GameOptions(), overlay: PerformanceOverlayMode = .off) async {
+              options: GameOptions = GameOptions(), overlay: PerformanceOverlayMode = .off,
+              offline: Bool = false) async {
         if reservedID == id {
             reservedID = nil
         } else {
@@ -120,7 +127,7 @@ final class GameLauncher {
             // Some games check the Gaming Services version in the registry.
             try? await runtime.applyGamingServicesVersion()
             state = .preparing(id: id, step: "Starting the Xbox services")
-            let bridge = try await ensureService(cli)
+            let bridge = try await ensureService(cli, offline: offline)
             if stopRequested { return finish(id, nil) }
 
             state = .preparing(id: id, step: "Starting \(title)")
@@ -137,7 +144,7 @@ final class GameLauncher {
                 }
             }
             try startGame(id: id, title: title, folder: folder, exe: exe, cli: cli, bridge: bridge,
-                          gameArguments: gameArguments, saveSync: saveSync)
+                          gameArguments: gameArguments, saveSync: saveSync, offline: offline)
         } catch {
             finish(id, error.localizedDescription)
         }
@@ -194,9 +201,12 @@ final class GameLauncher {
 
     // MARK: - Service
 
-    private func ensureService(_ cli: XodusCLI) async throws -> XodusBridge {
+    private func ensureService(_ cli: XodusCLI, offline: Bool) async throws -> XodusBridge {
+        // A service from an offline start has a device token that can be expired.
+        // An online start gets a new service, which renews the token.
         if let service, service.isRunning, let bridge,
-           FileManager.default.fileExists(atPath: Self.socketPath) {
+           FileManager.default.fileExists(atPath: Self.socketPath),
+           Self.canReuseService(startedOffline: serviceStartedOffline, offline: offline) {
             return bridge
         }
         service?.interrupt()
@@ -208,6 +218,9 @@ final class GameLauncher {
         var env = ProcessInfo.processInfo.environment
         env["XODUS_SOCKET"] = Self.socketPath
         env["XODUS_LOG"] = env["XODUS_LOG"] ?? "warn"
+        // Without internet, the service cannot renew the device token: it uses the stored one.
+        env["XODUS_FORCE_OFFLINE"] = offline ? "1" : nil
+        serviceStartedOffline = offline
         let process = StreamingProcess(url: cli.url, arguments: ["service"], environment: env)
         service = process
 
@@ -246,7 +259,8 @@ final class GameLauncher {
     // MARK: - Game
 
     private func startGame(id: String, title: String, folder: URL, exe: String,
-                           cli: XodusCLI, bridge: XodusBridge, gameArguments: [String], saveSync: SaveSync?) throws {
+                           cli: XodusCLI, bridge: XodusBridge, gameArguments: [String], saveSync: SaveSync?,
+                           offline: Bool) throws {
         let fm = FileManager.default
         try fm.createDirectory(at: Self.logFolder, withIntermediateDirectories: true)
         let safe = title.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) || $0 == " " }
@@ -259,13 +273,14 @@ final class GameLauncher {
         let useLauncher = fm.isExecutableFile(atPath: launcher.path)
         let process = Process()
         process.executableURL = cli.url
-        process.arguments = ["run", folder.path, useLauncher ? launcher.path : runtime.wine64.path, "--exe", exe,
-                             "--materialize-chain", "--market", market]
-            + (gameArguments.isEmpty ? [] : ["--"] + gameArguments)
+        process.arguments = Self.runArguments(
+            folder: folder, wine: useLauncher ? launcher.path : runtime.wine64.path, exe: exe, market: market,
+            licenses: licenseFolder, offline: offline, gameArguments: gameArguments)
         var extra = bridge.environment
         // The player's choice in a save conflict: this start downloads or uploads all saves.
         if let saveSync { extra["XODUS_SAVE_SYNC"] = saveSync.rawValue }
         extra.merge(GameCompat.environment(for: id)) { _, new in new }
+        extra.merge(Self.offlineEnvironment(accountKey: accountKey, offline: offline)) { _, new in new }
         if useLauncher {
             extra["IODUS_REAL_WINE"] = runtime.wine64.path
             // The PlayFab save proxy, for the games that need it (GameCompat).
@@ -298,6 +313,32 @@ final class GameLauncher {
         gameLog = log
         started = Date()
         state = .playing(id: id)
+    }
+
+    /// The arguments of `xodus-cli run`. The backend stores the offline license
+    /// of the game in `licenses` at each online start. With `offline`, the
+    /// backend does not contact Microsoft and uses the stored license.
+    nonisolated static func runArguments(folder: URL, wine: String, exe: String, market: String, licenses: URL,
+                             offline: Bool, gameArguments: [String]) -> [String] {
+        ["run", folder.path, wine, "--exe", exe, "--materialize-chain", "--market", market,
+         "--license-cache", licenses.path]
+            + (offline ? ["--offline"] : [])
+            + (gameArguments.isEmpty ? [] : ["--"] + gameArguments)
+    }
+
+    /// An online start does not use a service that started offline.
+    nonisolated static func canReuseService(startedOffline: Bool, offline: Bool) -> Bool {
+        offline || !startedOffline
+    }
+
+    /// The variables for the offline identity of the Xbox runtime. The backend
+    /// adds XODUS_OFFLINE_IDENTITY after its license decision. With `offline`,
+    /// the runtime does not wait for its network timeouts.
+    nonisolated static func offlineEnvironment(accountKey: String?, offline: Bool) -> [String: String] {
+        var environment: [String: String] = [:]
+        if let accountKey { environment["XODUS_ACCOUNT_HASH"] = accountKey }
+        if offline { environment["XODUS_FORCE_OFFLINE"] = "1" }
+        return environment
     }
 
     private func gameEnded(id: String, title: String, status: Int32) {

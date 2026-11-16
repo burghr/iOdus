@@ -171,6 +171,20 @@ struct InstallPromptView: View {
                         .fixedSize(horizontal: false, vertical: true)
                     info("Folder", path.replacingOccurrences(of: NSHomeDirectory(), with: "~"), s)
                     info("Frees", bytes.map(Bytes.text) ?? "Measuring…", s)
+                case .offlinePC(let changes):
+                    Text("Microsoft allows one offline PC for each account. If a different PC is the offline PC now, it loses its offline play.")
+                        .font(.system(size: 20 * s))
+                        .foregroundStyle(Theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("This changes a setting on your Microsoft account. Microsoft limits the number of changes.")
+                        .font(.system(size: 20 * s))
+                        .foregroundStyle(Theme.buttonY)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let changes { info("Microsoft", changes, s) }
+                    Text("After the change, start each game one time online. Then the game can start without internet for 30 days.")
+                        .font(.system(size: 17 * s))
+                        .foregroundStyle(Theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
                     Text("Your saves stay: the cloud saves, and the Mac saves in the game runtimes, are not in the game folder.")
                         .font(.system(size: 17 * s))
                         .foregroundStyle(Theme.textSecondary)
@@ -185,6 +199,9 @@ struct InstallPromptView: View {
                         button("Cancel", index: 1, enabled: true, s)
                     } else if case .uninstall = prompt.stage {
                         button("Uninstall", index: 0, enabled: true, s)
+                        button("Cancel", index: 1, enabled: true, s)
+                    } else if case .offlinePC = prompt.stage {
+                        button("Make offline PC", index: 0, enabled: true, s)
                         button("Cancel", index: 1, enabled: true, s)
                     } else if case .saveConflict = prompt.stage {
                         button("Use cloud save", index: 0, enabled: true, s)
@@ -213,6 +230,7 @@ struct InstallPromptView: View {
         case .restoreBackup: return "Restore this save?"
         case .deleteBackup: return "Delete this backup?"
         case .uninstall: return "Uninstall \(prompt.game.title)?"
+        case .offlinePC: return "Make this Mac the offline PC?"
         default: break
         }
         return "Install \(prompt.game.title)?"
@@ -249,7 +267,7 @@ struct InstallPromptView: View {
         // In a save conflict, both saves are real choices: no button is the default.
         var primary = index == 0
         switch prompt.stage {
-        case .saveConflict, .restoreBackup, .deleteBackup: primary = false
+        case .saveConflict, .restoreBackup, .deleteBackup, .offlinePC: primary = false
         default: break
         }
         return Text(title)

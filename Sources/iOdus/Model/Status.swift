@@ -105,7 +105,7 @@ final class NetworkMonitor {
     private var started = false
 
     /// Any HTTP answer from this host means that Xbox Live is reachable.
-    static let probe = URL(string: "https://user.auth.xboxlive.com/")!
+    nonisolated static let probe = URL(string: "https://user.auth.xboxlive.com/")!
 
     func start(_ model: AppModel) {
         self.model = model
@@ -133,7 +133,10 @@ final class NetworkMonitor {
         let before = model.network.kind
         model.network.kind = kind
         if before != kind, model.network.checkedAt != nil {
-            if kind == .offline { model.showToast("You are offline. Downloads and game starts need the internet.") }
+            if kind == .offline {
+                model.showToast("You are offline. Downloads need the internet. A game with an offline license can start.",
+                                seconds: 5)
+            }
             else if before == .offline { model.showToast("You are online again.") }
         }
         checkXboxLive()
@@ -147,19 +150,20 @@ final class NetworkMonitor {
             return
         }
         model.network.xboxLive = .checking
-        var request = URLRequest(url: Self.probe, timeoutInterval: 10)
-        request.httpMethod = "HEAD"
         Task {
-            let reachable: Bool
-            do {
-                let (_, response) = try await URLSession.shared.data(for: request)
-                reachable = response is HTTPURLResponse
-            } catch {
-                reachable = false
-            }
+            let reachable = await Self.xboxLiveAnswers()
             guard let model = self.model else { return }
             model.network.xboxLive = reachable ? .reachable : .unreachable
             model.network.checkedAt = Date()
+            // A library from the last online session: load the account again now.
+            if reachable { model.reloadAfterReconnect() }
         }
+    }
+
+    /// True when Xbox Live gives an HTTP answer in the time limit.
+    nonisolated static func xboxLiveAnswers(timeout: TimeInterval = 10) async -> Bool {
+        var request = URLRequest(url: probe, timeoutInterval: timeout)
+        request.httpMethod = "HEAD"
+        return ((try? await URLSession.shared.data(for: request))?.1 is HTTPURLResponse)
     }
 }

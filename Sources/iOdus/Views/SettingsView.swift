@@ -103,6 +103,9 @@ struct SettingsView: View {
         case .account:
             let name = [model.gamertag, model.accountName].filter { !$0.isEmpty }.joined(separator: " · ")
             return ("person.crop.circle", "Account", [name.isEmpty ? "Signed in" : name], "Sign out")
+        case .offlinePC:
+            let row = model.offlinePCRow
+            return (row.symbol, "Offline play", row.lines, row.action)
         case .installFolder:
             let free = Bytes.freeSpace(at: model.downloads.installRoot).map { "\(Bytes.text($0)) free" }
             return ("folder", "Install folder", [model.installFolderText] + (free.map { [$0] } ?? []), "Change")

@@ -63,6 +63,7 @@ struct InstallPrompt: Equatable {
         case restoreBackup(SaveBackup)                  // 0 = Restore, 1 = Cancel
         case deleteBackup(SaveBackup)                   // 0 = Delete, 1 = Cancel
         case uninstall(path: String, bytes: Int64?)     // 0 = Uninstall, 1 = Cancel
+        case offlinePC(changes: String?)                // Not a game: 0 = Make offline PC, 1 = Cancel
     }
 
     /// 0 = Install, 1 = Cancel; for a save conflict 0 = cloud, 1 = Mac, 2 = Cancel.
@@ -95,6 +96,16 @@ final class AppModel: ObservableObject {
     @Published var controllers: [ControllerStatus] = []
     @Published var statusPanel: StatusPanel?
     @Published var network = NetworkStatus()
+    /// The offline PC setting of the account (Settings > Account).
+    @Published var offlinePC: OfflinePCState = .unknown
+    /// True while the library is the stored one of the last online session.
+    @Published var libraryFromCache = false
+    /// The offline licenses and the stored library. Tests set temporary locations.
+    var licenseFolder = OfflineLicenses.folder { didSet { launcher.licenseFolder = licenseFolder } }
+    var libraryCacheFile = LibraryCache.file
+    var offlineDefaults = UserDefaults.standard
+    /// When each game started, to find the offline license of that start.
+    var playStarted: [String: Date] = [:]
     var notificationStore = NotificationStore()
     @Published var notifications: [AppNotification] = []
     @Published var notificationIndex = 0
@@ -237,10 +248,14 @@ final class AppModel: ObservableObject {
             let before = self.playBaseline.removeValue(forKey: id)
             let watcher = self.achievementWatcher
             self.achievementWatcher = nil
+            if let startedAt = self.playStarted.removeValue(forKey: id) {
+                self.learnOfflineLicense(gameID: id, startedAt: startedAt)
+            }
             Task {
                 await self.uploadSavesAfterGame(id)
                 await watcher?.stop()
                 await self.checkNewAchievements(gameID: id, before: before, announced: watcher?.announced.count ?? 0)
+                self.reloadAfterReconnect()
             }
         }
         downloads.onFinished = { [weak self] task in self?.downloadFinished(task) }
@@ -542,9 +557,10 @@ final class AppModel: ObservableObject {
         await signIn()
     }
 
-    private func loadAccount() async {
+    func loadAccount() async {
         guard let cli else { return }
         account = .loading
+        libraryFromCache = false
         // The profile is optional. A failure must not stop the library.
         async let profileTask: Void = loadProfile(cli)
         let name = accountName
@@ -575,10 +591,18 @@ final class AppModel: ObservableObject {
             homeIndex = [0, 0]
             libraryIndex = 0
             account = .ready
+            LibraryCache(account: name, games: games).save(to: libraryCacheFile)
             startMessagePolling()
             startUpdateChecks()
         } catch {
-            account = .failed(error.localizedDescription)
+            // Without internet: show the library of the last online session.
+            // A sign-in that Microsoft refuses stays an error.
+            let message = error.localizedDescription
+            var unreachable = !network.online
+            if !unreachable, !Self.isSignInFailure(message) { unreachable = !(await NetworkMonitor.xboxLiveAnswers()) }
+            if !(unreachable && !Self.isSignInFailure(message) && useStoredLibrary()) {
+                account = .failed(message)
+            }
         }
         await profileTask
     }
@@ -644,6 +668,10 @@ final class AppModel: ObservableObject {
                 gamertag = ""
                 gamerpic = nil
                 accountName = ""
+                offlinePC = .unknown
+                libraryFromCache = false
+                LibraryCache.remove(libraryCacheFile)
+                OfflineIdentities.remove(prefixes: runtimes.map(\.prefix))
                 stack = [.home]
                 account = .signedOut
             } catch {
@@ -758,7 +786,13 @@ final class AppModel: ObservableObject {
         if !hasReadyRuntime || RosettaStatus.detect() == .missing, openSetup() {
             return
         }
-        if saveSync == nil, case .conflict(let local, let cloud) = cloudSaveStatus(for: game) {
+        // Without internet, only a game with a valid offline license can start.
+        let offline = !network.online
+        if offline, let problem = offlineStartProblem(for: game, saveSync: saveSync) {
+            showToast(problem, seconds: 8)
+            return
+        }
+        if !offline, saveSync == nil, case .conflict(let local, let cloud) = cloudSaveStatus(for: game) {
             var prompt = InstallPrompt(game: game)
             prompt.stage = .saveConflict(local: local, cloud: cloud)
             installPrompt = prompt
@@ -782,8 +816,13 @@ final class AppModel: ObservableObject {
         let runtime = runtime(for: game)
         // The button changes to "Starting…" now; the start itself takes a moment.
         guard launcher.reserve(id: game.id, title: game.title) else { return }
+        playStarted[game.id] = Date()
+        launcher.accountKey = accountName.isEmpty ? nil : LibraryCache.key(accountName)
         Task { await launcher.play(id: game.id, title: game.title, folder: URL(fileURLWithPath: path), saveSync: saveSync,
-                                   using: runtime, options: gameOptions.options(game.id), overlay: overlayMode(for: game.id)) }
+                                   using: runtime, options: gameOptions.options(game.id), overlay: overlayMode(for: game.id),
+                                   offline: offline) }
+        // Achievements and the save state come from Xbox Live.
+        guard !offline else { return }
         startAchievementWatcher(for: game)
         if saveSync == nil { watchForSaveConflict(game) }
     }
@@ -794,6 +833,10 @@ final class AppModel: ObservableObject {
     func uploadSavesAfterGame(_ id: String) async {
         guard !demo, let game = game(id), case .waiting = cloudSaveStatus(for: game),
               let path = downloads.installs[id]?.path else { return }
+        guard network.online else {
+            showToast("The save of \(game.title) stays on this Mac. It uploads at the next online start.", seconds: 6)
+            return
+        }
         uploadingSaves = id
         showToast("Uploading the save of \(game.title)…", seconds: 120)
         let line = await launcher.syncSaves(folder: URL(fileURLWithPath: path))
@@ -909,6 +952,10 @@ final class AppModel: ObservableObject {
         case .uninstall:
             installPrompt = nil
             if prompt.focus == 0 { uninstallGame(prompt.game) }
+            return
+        case .offlinePC:
+            installPrompt = nil
+            if prompt.focus == 0 { makeOfflinePC() }
             return
         default: break
         }
@@ -1046,6 +1093,7 @@ final class AppModel: ObservableObject {
             }
             switch row {
             case .account: signOut()
+            case .offlinePC: offlinePCAction()
             case .installFolder: chooseInstallFolder()
             case .rescan: rescanInstallFolder()
             case .runtime: openRuntimes(gameID: nil)
@@ -1287,6 +1335,8 @@ final class AppModel: ObservableObject {
 
     /// Settings opens on the first category, with the focus on the list.
     func resetSettings() {
+        // The first category shows the offline PC setting: read it one time.
+        Task { await loadOfflinePC() }
         settingsCategory = 0
         settingsFocus = .categories
         settingsIndex = 0
@@ -1646,7 +1696,7 @@ enum DetailAction: Int, CaseIterable {
 
 enum SettingsRow: Int, CaseIterable {
     case account, installFolder, rescan, fullScreen, performance, appUpdate, releaseNotes, updates, prereleases, runtime, vcRuntime,
-         backend, exportLogs, about
+         backend, exportLogs, about, offlinePC
 }
 
 /// The state of the in-app update (Settings > Updates).
@@ -1697,7 +1747,7 @@ enum SettingsCategory: Int, CaseIterable {
 
     var rows: [SettingsRow] {
         switch self {
-        case .account: [.account]
+        case .account: [.account, .offlinePC]
         case .games: [.installFolder, .rescan]
         case .display: [.fullScreen, .performance]
         case .runtimes: [.runtime, .vcRuntime]
