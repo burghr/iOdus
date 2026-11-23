@@ -13,6 +13,7 @@ CrossOver 26.3, in name order. A patch that is already in the tree is skipped.
 | `highball-0018-macos-commit-charge-is-the-footprint.patch` | Highball engine 0018 | Wine reported address space as memory in use; Forza Horizon 6 warned about low memory. |
 | `highball-0019-advapi32-credenumerate-empty-keychain-is-not-an-error.patch` | [Highball engine 0019](https://github.com/gauthierpiarrette/highball-engine/blob/main/patches/0019-advapi32-credenumerate-empty-keychain-is-not-an-error.patch) | `CredEnumerateW` must preserve matching registry credentials when the macOS Keychain has no match. Minecraft Dungeons otherwise stalls after Microsoft sign-in. |
 | `highball-0029-concrt140-msvcp90-concurrent-vector-from-upstream.patch` | Highball engine 0029, a backport of upstream Wine de43f5434fe and d5c7ea9089e (Piotr Caban) | Forza Horizon 6 crashed in its first minute in `concrt140`. |
+| `winhttp-decompression-stub.patch` | A backport of upstream Wine 22aedfab35 (Paul Gofman), in Wine 11.4 | `WinHttpSetOption(WINHTTP_OPTION_DECOMPRESSION)` on a request failed. The Xbox build of Disney Speedstorm then closed its first Gameloft request and stopped with "failed to connect to the server (2)". |
 
 The Highball patches are unchanged copies. Like Wine, they are under the
 GNU LGPL 2.1 or later (the Highball engine repository is LGPL-2.1). Thanks to

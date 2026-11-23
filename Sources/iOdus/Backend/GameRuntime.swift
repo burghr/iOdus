@@ -85,7 +85,7 @@ struct GameRuntime: Sendable, Equatable {
         // GPTK only: Wine 11 has this API set in its schema (wine11-patches).
         "api-ms-win-core-debug-minidump-l1-1-0.dll",
         "d3d11.dll",   // The iOdus proxy in front of the D3DMetal d3d11.dll
-        "winhttp.dll", // The iOdus proxy in front of the GPTK winhttp.dll (WINHTTP_OPTION_URL)
+        "winhttp.dll", // The iOdus proxy in front of Wine's winhttp.dll (WINHTTP_OPTION_URL, WINHTTP_OPTION_DECOMPRESSION)
     ]
 
     static var support: URL {
@@ -115,14 +115,36 @@ struct GameRuntime: Sendable, Equatable {
             usesBundle: root == support.appendingPathComponent("Runtime", isDirectory: true))
     }
 
+    /// The iOdus winhttp proxy (scripts/runtime-compat/winhttp-proxy.c) for a
+    /// D3DMetal runtime with a Wine older than 11.4. Its winhttp.dll refuses
+    /// WINHTTP_OPTION_DECOMPRESSION on a request; the Xbox build of Disney Speedstorm
+    /// then closes its first Gameloft request, and the login stops with "failed to
+    /// connect to the server (2)". The proxy accepts the option. The native arm64
+    /// runtimes have their own winhttp and a newer Wine, so they keep their manifest.
+    static func withWinhttpProxy(_ m: RuntimeManifest) -> RuntimeManifest {
+        guard m.signedLoader == nil, wineIsOlder(m.wineVersion, than: (11, 4)) else { return m }
+        var m = m
+        if !m.components.contains("winhttp.dll") { m.components.append("winhttp.dll") }
+        if m.overrides["winhttp"] == nil { m.overrides["winhttp"] = "native,builtin" }
+        return m
+    }
+
+    /// "11.0" < 11.4. A version that does not read as numbers counts as older.
+    static func wineIsOlder(_ version: String, than limit: (Int, Int)) -> Bool {
+        let parts = version.split(separator: ".").map { Int($0) }
+        guard let major = parts.first ?? nil else { return true }
+        let minor = parts.count > 1 ? (parts[1] ?? 0) : 0
+        return (major, minor) < limit
+    }
+
     /// A runtime from a runtime folder with a runtime.json.
     static func from(manifest m: RuntimeManifest, root: URL, prefix: URL,
                      componentRoot: URL = standard.componentRoot, usesBundle: Bool = true) -> GameRuntime {
         GameRuntime(id: m.id, name: m.name, wineVersion: m.wineVersion, root: root,
                     wine64: root.appendingPathComponent(m.wine), wineserver: root.appendingPathComponent(m.wineserver),
                     prefix: prefix, libraries: m.libraries.map { root.appendingPathComponent($0, isDirectory: true) },
-                    componentNames: m.components.filter { components.contains($0) },
-                    overrides: m.overrides.sorted { $0.key < $1.key }.map { ($0.key, $0.value) },
+                    componentNames: withWinhttpProxy(m).components.filter { components.contains($0) },
+                    overrides: withWinhttpProxy(m).overrides.sorted { $0.key < $1.key }.map { ($0.key, $0.value) },
                     register: m.register ?? [], propertySet: m.propertySet,
                     extraEnvironment: (m.environment ?? [:]).mapValues {
                         $0.replacingOccurrences(of: "{root}", with: root.path).replacingOccurrences(of: "{prefix}", with: prefix.path)

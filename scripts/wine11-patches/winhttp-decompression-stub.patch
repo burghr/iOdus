@@ -1,0 +1,24 @@
+winhttp: accept WINHTTP_OPTION_DECOMPRESSION.
+
+A backport of upstream Wine 22aedfab35 (Paul Gofman), in Wine 11.4. The Wine
+11.0 base of CrossOver 26.3 rejects option 118 on a request handle ("unimplemented
+option 118"). The Xbox (GDK) build of Disney Speedstorm sets it on its first
+Gameloft request (eve.gameloft.com, the server list). The set fails, the game
+closes the request without sending it, and the login stops with "failed to
+connect to the server (2)". The stub accepts the option. WinHTTP then sends no
+Accept-Encoding header, so the server answers without compression.
+
+--- a/dlls/winhttp/session.c
++++ b/dlls/winhttp/session.c
+@@ -1452,6 +1452,11 @@ static BOOL set_option( struct object_header *hdr, DWORD option, void *buffer, D
+         hdr->context = *(DWORD_PTR *)buffer;
+         return TRUE;
+     }
++
++    case WINHTTP_OPTION_DECOMPRESSION:
++        FIXME( "WINHTTP_OPTION_DECOMPRESSION, %#lx stub.\n", *(DWORD *)buffer );
++        return TRUE;
++
+     default:
+         if (hdr->vtbl->set_option) ret = hdr->vtbl->set_option( hdr, option, buffer, buflen );
+         else
