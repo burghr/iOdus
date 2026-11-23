@@ -134,6 +134,8 @@ configure_and_build() {
   x86_64-w64-mingw32-gcc -shared -O2 -Wall -o "$OUT/d3d11.dll" "$COMPAT/d3d11-proxy.c" "$COMPAT/d3d11-proxy.def"
   # GPTK Wine 7.7 has no WINHTTP_OPTION_URL. libHttpClient asks for it in each
   # request and closes the request without it (Xbox Live calls of the game fail).
+  # Before Wine 11.4, it also refuses WINHTTP_OPTION_DECOMPRESSION on a request
+  # (Disney Speedstorm); the proxy accepts it. iOdus adds it to the Wine 11.0 runtimes too.
   # The prefix needs the DLL override winhttp=native,builtin.
   x86_64-w64-mingw32-gcc -shared -O2 -Wall -o "$OUT/winhttp.dll" "$COMPAT/winhttp-proxy.c" "$COMPAT/winhttp-proxy.def"
   # The d3d12.dll layer for D3DMetal 4 (Highball, GPL-3.0), for

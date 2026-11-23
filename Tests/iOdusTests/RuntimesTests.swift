@@ -39,6 +39,24 @@ final class RuntimesTests: XCTestCase {
                                 prefixes: temp.appendingPathComponent("Prefixes"), standard: standard)
     }
 
+    func testWinhttpProxyForOldWine() {
+        func manifest(_ version: String, loader: String? = nil) -> RuntimeManifest {
+            RuntimeManifest(id: "r", name: "R", wineVersion: version, wine: "bin/wine", wineserver: "bin/wineserver",
+                            libraries: nil, components: ["xgameruntime.dll"], overrides: [:], register: nil,
+                            propertySet: nil, environment: nil, release: nil, d3dmetal: nil, inputGate: nil,
+                            overlay: nil, signedLoader: loader)
+        }
+        let old = GameRuntime.withWinhttpProxy(manifest("11.0"))
+        XCTAssertEqual(old.components, ["xgameruntime.dll", "winhttp.dll"])
+        XCTAssertEqual(old.overrides["winhttp"], "native,builtin")
+        XCTAssertEqual(GameRuntime.withWinhttpProxy(manifest("11.4")), manifest("11.4"), "11.4 accepts the option")
+        XCTAssertEqual(GameRuntime.withWinhttpProxy(manifest("11.18")), manifest("11.18"))
+        XCTAssertEqual(GameRuntime.withWinhttpProxy(manifest("11.0", loader: "bin/wine")), manifest("11.0", loader: "bin/wine"),
+                       "Native arm64 runtimes keep their manifest")
+        let twice = GameRuntime.withWinhttpProxy(old)
+        XCTAssertEqual(twice.components.filter { $0 == "winhttp.dll" }.count, 1)
+    }
+
     func testDiscovery() throws {
         XCTAssertEqual(discover().map(\.id), ["gptk-3.0-3"], "Only GPTK without runtime folders")
         try addRuntime("crossover-26.3")
@@ -52,7 +70,9 @@ final class RuntimesTests: XCTestCase {
         XCTAssertEqual(wine11.wine64.lastPathComponent, "wine")
         XCTAssertEqual(wine11.prefix.lastPathComponent, "crossover-26.3")
         XCTAssertEqual(wine11.prefix.deletingLastPathComponent().lastPathComponent, "Prefixes")
-        XCTAssertEqual(wine11.componentNames, ["xgameruntime.dll", "d3d11.dll"], "Unknown DLL names are dropped")
+        XCTAssertEqual(wine11.componentNames, ["xgameruntime.dll", "d3d11.dll", "winhttp.dll"],
+                       "Unknown DLL names are dropped; Wine 11.0 gets the winhttp proxy")
+        XCTAssertTrue(wine11.overrides.contains { $0.0 == "winhttp" && $0.1 == "native,builtin" })
         XCTAssertEqual(wine11.environment()["DYLD_FALLBACK_LIBRARY_PATH"]?.hasPrefix(wine11.root.path + "/lib"), true)
         XCTAssertEqual(wine11.environment()["CX_APPLEGPTK_LIBD3DSHARED_PATH"],
                        wine11.root.path + "/lib/external/libd3dshared.dylib")

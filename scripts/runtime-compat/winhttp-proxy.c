@@ -17,6 +17,13 @@
  * path ".../update"). iOdus then reads the achievement list from Xbox Live and
  * shows a popup for each new unlock. The request itself does not change.
  *
+ * WinHttpSetOption(WINHTTP_OPTION_DECOMPRESSION) on a request handle fails in
+ * Wine before 11.4 ("unimplemented option 118"). The Xbox build of Disney
+ * Speedstorm sets it on its first Gameloft request, closes the request when the
+ * set fails, and stops with "failed to connect to the server (2)". The proxy
+ * accepts the option, like upstream Wine 22aedfab35. WinHTTP then sends no
+ * Accept-Encoding header, so the server answers without compression.
+ *
  * Install: system32\winhttp.dll with the DLL override winhttp=native,builtin. */
 #include <windows.h>
 #define _WINHTTP_INTERNAL_   /* This DLL defines the WinHTTP functions; do not import them. */
@@ -35,7 +42,7 @@ static SRWLOCK lock = SRWLOCK_INIT;
     F(WinHttpGetProxyResultEx) F(WinHttpGetProxySettingsVersion) F(WinHttpOpen) F(WinHttpQueryAuthSchemes) \
     F(WinHttpQueryDataAvailable) F(WinHttpQueryHeaders) F(WinHttpReadData) F(WinHttpReadProxySettings) \
     F(WinHttpReceiveResponse) F(WinHttpResetAutoProxy) F(WinHttpSendRequest) F(WinHttpSetCredentials) \
-    F(WinHttpSetDefaultProxyConfiguration) F(WinHttpSetOption) F(WinHttpSetStatusCallback) \
+    F(WinHttpSetDefaultProxyConfiguration) F(WinHttpSetStatusCallback) \
     F(WinHttpSetTimeouts) F(WinHttpTimeFromSystemTime) F(WinHttpTimeToSystemTime) F(WinHttpWebSocketClose) \
     F(WinHttpWebSocketCompleteUpgrade) F(WinHttpWebSocketQueryCloseStatus) F(WinHttpWebSocketReceive) \
     F(WinHttpWebSocketSend) F(WinHttpWebSocketShutdown) F(WinHttpWriteData) F(WinHttpWriteProxySettings)
@@ -45,12 +52,20 @@ static SRWLOCK lock = SRWLOCK_INIT;
 FORWARDS
 #undef F
 
-/* The four calls that this DLL changes. */
+#ifndef WINHTTP_OPTION_DECOMPRESSION
+#define WINHTTP_OPTION_DECOMPRESSION 118
+#endif
+#ifndef WINHTTP_DECOMPRESSION_FLAG_ALL
+#define WINHTTP_DECOMPRESSION_FLAG_ALL 0x3
+#endif
+
+/* The five calls that this DLL changes. */
 static HINTERNET (WINAPI *real_connect)( HINTERNET, const WCHAR *, INTERNET_PORT, DWORD );
 static HINTERNET (WINAPI *real_open_request)( HINTERNET, const WCHAR *, const WCHAR *, const WCHAR *,
                                               const WCHAR *, const WCHAR **, DWORD );
 static BOOL (WINAPI *real_close)( HINTERNET );
 static BOOL (WINAPI *real_query_option)( HINTERNET, DWORD, void *, DWORD * );
+static BOOL (WINAPI *real_set_option)( HINTERNET, DWORD, void *, DWORD );
 static BOOL (WINAPI *real_create_url)( URL_COMPONENTS *, DWORD, WCHAR *, DWORD * );
 
 /* A connect handle (host and port) or a request handle (the full URL). */
@@ -276,6 +291,22 @@ BOOL WINAPI WinHttpQueryOption( HINTERNET handle, DWORD option, void *buffer, DW
     return ret;
 }
 
+BOOL WINAPI WinHttpSetOption( HINTERNET handle, DWORD option, void *buffer, DWORD buflen )
+{
+    BOOL ret = real_set_option( handle, option, buffer, buflen );
+    DWORD error = GetLastError();
+
+    /* Accept only what Windows accepts: a DWORD with known flags. */
+    if (!ret && option == WINHTTP_OPTION_DECOMPRESSION && error == ERROR_WINHTTP_INVALID_OPTION
+        && buffer && buflen == sizeof(DWORD) && !(*(DWORD *)buffer & ~WINHTTP_DECOMPRESSION_FLAG_ALL))
+    {
+        SetLastError( ERROR_SUCCESS );
+        return TRUE;
+    }
+    SetLastError( error );
+    return ret;
+}
+
 /* The real winhttp.dll: $IODUS_REAL_WINHTTP, or <WINEDLLDIR0>\x86_64-windows\winhttp.dll. */
 static BOOL load_real( void )
 {
@@ -299,8 +330,9 @@ static BOOL load_real( void )
     real_open_request = (void *)GetProcAddress( real, "WinHttpOpenRequest" );
     real_close = (void *)GetProcAddress( real, "WinHttpCloseHandle" );
     real_query_option = (void *)GetProcAddress( real, "WinHttpQueryOption" );
+    real_set_option = (void *)GetProcAddress( real, "WinHttpSetOption" );
     real_create_url = (void *)GetProcAddress( real, "WinHttpCreateUrl" );
-    return real_connect && real_open_request && real_close && real_query_option && real_create_url;
+    return real_connect && real_open_request && real_close && real_query_option && real_set_option && real_create_url;
 }
 
 /* WinHttpCreateUrl is a plain forward too, but make_url needs its pointer. */
